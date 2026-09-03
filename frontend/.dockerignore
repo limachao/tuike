@@ -1,0 +1,15 @@
+node_modules
+dist
+.env
+.env.local
+.env.*.local
+*.log
+npm-debug.log*
+.DS_Store
+.git
+.gitignore
+.vscode
+.idea
+*.tsbuildinfo
+coverage
+src-tauri

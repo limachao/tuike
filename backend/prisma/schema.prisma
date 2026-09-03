@@ -1,0 +1,555 @@
+// 学生听课监控与提醒工具 - 数据库 Schema
+// 首期 V1.0 - 核心版本
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ================================
+// 1. 用户与权限
+// ================================
+
+enum UserRole {
+  SALES       // 销售老师
+  SUPERVISOR  // 主管
+  SUPER_ADMIN // 超级管理员
+}
+
+model User {
+  id             Int       @id @default(autoincrement())
+  phone          String    @unique @db.VarChar(20)
+  passwordHash   String    @db.VarChar(255)
+  name           String    @db.VarChar(50)
+  role           UserRole  @default(SALES)
+  avatarUrl      String?   @db.VarChar(500)
+  // 企业微信关联
+  wecomUserId    String?   @unique @map("wecom_userid") @db.VarChar(100)
+  wecomOpenUserid String?  @db.VarChar(100)
+  // 客户联系权限
+  hasCustomerContact Boolean @default(false)
+  // 状态
+  isActive       Boolean   @default(true)
+  lastLoginAt    DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  // 关联
+  ownedCustomers       Customer[]                @relation("CustomerOwner")
+  customerSalesRelations CustomerSalesRelation[]
+  rosterEntries        CourseRoster[]          @relation("RosterOwnerAtJoin")
+  tasks                CourseMonitoringTask[]
+  groupMessages        WecomGroupMessageTask[]
+  audits               AuditLog[]
+
+  @@index([wecomUserId])
+  @@map("users")
+}
+
+// ================================
+// 2. 企业微信客户 & 内部学生身份
+// ================================
+
+model Customer {
+  id                  Int       @id @default(autoincrement())
+  // 企业微信侧
+  externalUserid      String    @unique @map("external_userid") @db.VarChar(100)
+  nickname            String    @db.VarChar(100)
+  avatar              String?   @db.VarChar(500)
+  gender              Int?      // 0未知 1男 2女
+  // 联系方式（脱敏存储，展示时再遮罩）
+  mobileEncrypted     String?   @db.VarChar(255)
+  remarkMobiles       String?   @db.VarChar(500) // 逗号分隔
+  // 企业标签（JSON 数组字符串）
+  tags                String?   @db.Text
+  // 负责销售（可多个，存主跟进人）
+  ownerUserId         Int?      @map("owner_user_id")
+  owner               User?     @relation("CustomerOwner", fields: [ownerUserId], references: [id])
+  // 客户与销售多对多关系（归属冲突支持）
+  relations           CustomerSalesRelation[]
+  // 内部学生身份
+  studentId           String    @unique @map("student_id") @db.VarChar(50) // 系统生成
+  thirdPartyTraceId   String?   @unique @map("third_party_trace_id") @db.VarChar(100)
+  // 状态
+  isDeleted           Boolean   @default(false) // 客户删除销售/冻结
+  unfollowReason      String?   @db.VarChar(200)
+  // 时间
+  firstAddTime        DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+  lastSyncedAt        DateTime?
+
+  // 关联
+  feiceIdentities     FeiceIdentity[]
+  rosterEntries       CourseRoster[]
+  transferVisits      TransferPageVisit[]
+  groupMessageReceipts WecomGroupMessageRecipient[]
+  identityMatchExceptions IdentityMatchException[]
+
+  @@index([ownerUserId])
+  @@index([studentId])
+  @@index([thirdPartyTraceId])
+  @@map("customers")
+}
+
+// 客户与销售多对多关系（归属冲突）
+model CustomerSalesRelation {
+  id          Int       @id @default(autoincrement())
+  customerId  Int
+  salesUserId Int
+  addTime     DateTime?
+  isPrimary   Boolean   @default(false)
+  status      String    @default("active") @db.VarChar(20) // active / transferred / deleted
+  createdAt   DateTime  @default(now())
+
+  customer    Customer  @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  salesUser   User      @relation(fields: [salesUserId], references: [id], onDelete: Cascade)
+
+  @@unique([customerId, salesUserId])
+  @@index([salesUserId])
+  @@map("customer_sales_relations")
+}
+
+// 飞策侧身份（支持一个学生多个uid/thirdPartyStudentId）
+model FeiceIdentity {
+  id                  Int       @id @default(autoincrement())
+  customerId          Int
+  // 匹配优先级字段
+  uid                 String?   @db.VarChar(100)
+  thirdPartyStudentId String?   @map("third_party_student_id") @db.VarChar(100)
+  thirdPartyTraceId   String?   @map("third_party_trace_id") @db.VarChar(100)
+  mobileHash          String?   @db.VarChar(100)
+  unionId             String?   @db.VarChar(100)
+  // 匹配置信度
+  matchLevel          Int       @default(0) // 0未确认 1-7对应SPEC匹配优先级
+  matchSource         String?   @db.VarChar(50)
+  isConfirmed         Boolean   @default(false) // 是否人工/系统确认
+  // 时间
+  matchedAt           DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  customer            Customer  @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([customerId])
+  @@index([uid])
+  @@index([thirdPartyStudentId])
+  @@index([thirdPartyTraceId])
+  @@map("feice_identities")
+}
+
+// 身份匹配异常名单
+model IdentityMatchException {
+  id          Int       @id @default(autoincrement())
+  customerId  Int       @unique
+  reason      String    @db.VarChar(500)
+  handled     Boolean   @default(false)
+  handledBy   Int?
+  handledAt   DateTime?
+  createdAt   DateTime  @default(now())
+
+  customer    Customer  @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  @@map("identity_match_exceptions")
+}
+
+// ================================
+// 3. 课程与直播间
+// ================================
+
+enum CourseStatus {
+  NOT_STARTED
+  LIVE
+  ENDED
+  REPLAY_ONLY
+}
+
+model Course {
+  id              Int          @id @default(autoincrement())
+  // 飞策侧
+  feiceLiveRoomId String       @unique @map("feice_live_room_id") @db.VarChar(100)
+  feiceLiveId     String?      @map("feice_live_id") @db.VarChar(100)
+  // 基本信息
+  name            String       @db.VarChar(200)
+  coverUrl        String?      @db.VarChar(500)
+  description     String?      @db.Text
+  // 时间
+  startTime       DateTime?
+  endTime         DateTime?
+  actualStartTime DateTime?
+  actualEndTime   DateTime?
+  // 时长（秒）- 用于计算完成率，异常时可人工修正
+  totalDuration   Int          @default(0) // 秒
+  durationSource  String?      @default("feice") @db.VarChar(20) // feice / manual
+  // 状态
+  status          CourseStatus @default(NOT_STARTED)
+  isReplayReady   Boolean      @default(false)
+  // 入口
+  liveEntryUrl    String?      @db.VarChar(500)
+  replayEntryUrl  String?      @db.VarChar(500)
+  // 同步
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+  lastSyncedAt    DateTime?
+
+  // 关联
+  monitoringTasks CourseMonitoringTask[]
+  liveRecords     LiveWatchRecord[]
+  replayRecords   ReplayWatchRecord[]
+  transferVisits  TransferPageVisit[]
+
+  @@index([startTime])
+  @@index([status])
+  @@map("courses")
+}
+
+// ================================
+// 4. 课程监控任务 & 固定应听名单快照
+// ================================
+
+enum RosterEntryStatus {
+  IN_LIST         // 已进入应听名单
+  EXCLUDED        // 被销售排除
+  NOT_ENTERED     // 从未进入
+  INCOMPLETE      // 听课不足60%
+  COMPLETED       // 已完成
+  STOPPED         // 手动停止提醒
+}
+
+model CourseMonitoringTask {
+  id                Int       @id @default(autoincrement())
+  courseId          Int
+  createdBySalesId  Int
+  taskName          String    @db.VarChar(200) // 任务名（默认=课程名）
+  // 完成标准（可在创建时修改，默认60%）
+  completeDurationPercent Int @default(60)
+  completeProgressPercent Int @default(60)
+  // 提醒配置
+  maxRemindersPerStudent Int @default(3)
+  // 统计缓存
+  totalRosterCount    Int     @default(0)
+  notEnteredCount     Int     @default(0)
+  incompleteCount     Int     @default(0)
+  completedCount      Int     @default(0)
+  excludedCount       Int     @default(0)
+  // 状态
+  isActive            Boolean @default(true)
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  rosterFinalizedAt   DateTime? // 销售确认名单时间
+
+  course      Course @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  createdBy   User   @relation(fields: [createdBySalesId], references: [id])
+  roster      CourseRoster[]
+  groupMessages WecomGroupMessageTask[]
+
+  @@index([createdBySalesId])
+  @@index([courseId])
+  @@map("course_monitoring_tasks")
+}
+
+model CourseRoster {
+  id              Int               @id @default(autoincrement())
+  taskId          Int
+  customerId      Int
+  // 快照 - 创建时的归属销售
+  ownerUserIdAtJoin Int             @map("owner_user_id_at_join")
+  // 加入信息
+  joinedAt        DateTime          @default(now())
+  joinMethod      String            @default("select_all") @db.VarChar(30) // select_all / manual / new_customer
+  // 排除信息
+  isExcluded      Boolean           @default(false)
+  excludeReason   String?           @db.VarChar(500)
+  excludedBy      Int?
+  excludedAt      DateTime?
+  // 停止提醒
+  stopReminder    Boolean           @default(false)
+  stopReason      String?           @db.VarChar(100) // completed / manual / transfer_page / rejected / deleted / max_reached
+  stoppedAt       DateTime?
+  // 听课汇总（冗余方便查询，由引擎定时更新）
+  totalDurationSec  Int             @default(0)
+  maxProgressSec    Int             @default(0)
+  lastWatchTime     DateTime?
+  reminderCount     Int             @default(0)
+  lastReminderAt    DateTime?
+  // 当前状态
+  status          RosterEntryStatus @default(IN_LIST)
+  updatedAt       DateTime          @updatedAt
+
+  task            CourseMonitoringTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  customer        Customer         @relation(fields: [customerId], references: [id], onDelete: Cascade)
+  ownerAtJoin     User             @relation("RosterOwnerAtJoin", fields: [ownerUserIdAtJoin], references: [id])
+  groupMessageRecipients WecomGroupMessageRecipient[]
+
+  @@unique([taskId, customerId])
+  @@index([taskId, status])
+  @@index([customerId])
+  @@map("course_rosters")
+}
+
+// ================================
+// 5. 听课记录
+// ================================
+
+// 直播观看记录
+model LiveWatchRecord {
+  id              Int       @id @default(autoincrement())
+  courseId        Int
+  // 飞策原始字段
+  uid             String?   @db.VarChar(100)
+  thirdPartyStudentId String? @map("third_party_student_id") @db.VarChar(100)
+  thirdPartyTraceId String?   @map("third_party_trace_id") @db.VarChar(100)
+  liveId          String?   @db.VarChar(100)
+  userType        String?   @db.VarChar(20) // student / teacher / assistant
+  learningDuration Int      @default(0) // 毫秒或秒，按飞策实际
+  enterClassTime  DateTime?
+  exitClassTime   DateTime?
+  // 计算结果
+  effectiveDurationSec Int @default(0) // 折算有效秒数
+  estimatedMaxProgressSec Int @default(0) // 推算最大进度
+  // 关联身份
+  feiceIdentityId Int?
+  customerId      Int?
+  // 去重
+  recordHash      String    @unique @db.VarChar(100) // uid+liveId+enterTime
+  rawData         String?   @db.Text
+  createdAt       DateTime  @default(now())
+
+  course          Course    @relation(fields: [courseId], references: [id], onDelete: Cascade)
+
+  @@index([courseId, userType])
+  @@index([customerId])
+  @@index([uid])
+  @@map("live_watch_records")
+}
+
+// 回放观看记录
+model ReplayWatchRecord {
+  id              Int       @id @default(autoincrement())
+  courseId        Int
+  // 飞策原始字段
+  uid             String?   @db.VarChar(100)
+  thirdPartyStudentId String? @map("third_party_student_id") @db.VarChar(100)
+  liveRoomId      String?   @db.VarChar(100)
+  locate          Int       @default(0) // 播放位置
+  enterTime       DateTime?
+  exitTime        DateTime?
+  // 计算结果
+  effectiveDurationSec Int @default(0)
+  // 关联
+  feiceIdentityId Int?
+  customerId      Int?
+  // 去重
+  recordHash      String    @unique @db.VarChar(100)
+  rawData         String?   @db.Text
+  createdAt       DateTime  @default(now())
+
+  course          Course    @relation(fields: [courseId], references: [id], onDelete: Cascade)
+
+  @@index([courseId])
+  @@index([customerId])
+  @@index([uid])
+  @@map("replay_watch_records")
+}
+
+// ================================
+// 6. 企业微信群发提醒任务
+// ================================
+
+enum GroupMessageStatus {
+  DRAFT            // 草稿
+  PENDING_CONFIRM  // 待销售确认
+  EXECUTED         // 销售已执行
+  PARTIAL_SUCCESS  // 部分成功
+  ALL_SUCCESS      // 全部成功
+  FAILED           // 发送失败
+  UNKNOWN          // 结果未知
+  STOPPED          // 已停止
+}
+
+enum MessageTemplateType {
+  NEVER_ENTERED    // 从未进入模板
+  INCOMPLETE       // 听课不足模板
+}
+
+model MessageTemplate {
+  id          Int                @id @default(autoincrement())
+  name        String             @db.VarChar(100)
+  type        MessageTemplateType
+  content     String             @db.Text
+  isDefault   Boolean            @default(false)
+  createdBy   Int?
+  version     Int                @default(1)
+  isActive    Boolean            @default(true)
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+  @@map("message_templates")
+}
+
+model WecomGroupMessageTask {
+  id                Int                @id @default(autoincrement())
+  taskNo            String             @unique @db.VarChar(50) // 业务唯一编号
+  monitoringTaskId  Int
+  createdBySalesId  Int
+  // 模板
+  templateId        Int?
+  templateVersion   Int                @default(1)
+  templateType      MessageTemplateType
+  // 实际发送内容（最终保存版本）
+  finalContent      String             @db.Text
+  finalUrl          String             @db.VarChar(500) // 课程中转页URL
+  // 入口类型
+  entryType         String             @default("live") @db.VarChar(20) // live / replay
+  // 企业微信
+  wecomMsgid        String?            @unique @db.VarChar(100)
+  // 统计
+  totalRecipients   Int                @default(0)
+  confirmedCount    Int                @default(0)
+  sentSuccessCount  Int                @default(0)
+  sentFailCount     Int                @default(0)
+  failList          String?            @db.Text // JSON
+  // 状态
+  status            GroupMessageStatus @default(DRAFT)
+  salesConfirmedAt  DateTime?
+  wecomCreatedAt    DateTime?
+  lastStatusCheckAt DateTime?
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+
+  monitoringTask    CourseMonitoringTask @relation(fields: [monitoringTaskId], references: [id], onDelete: Cascade)
+  createdBy         User                 @relation(fields: [createdBySalesId], references: [id])
+  recipients        WecomGroupMessageRecipient[]
+
+  @@index([createdBySalesId, status])
+  @@index([wecomMsgid])
+  @@map("wecom_group_message_tasks")
+}
+
+model WecomGroupMessageRecipient {
+  id                 Int       @id @default(autoincrement())
+  messageTaskId      Int
+  rosterEntryId      Int
+  customerId         Int
+  externalUserid     String    @db.VarChar(100)
+  // 发送结果
+  wecomSendStatus    String?   @db.VarChar(50) // 企业微信返回
+  wecomFailReason    String?   @db.VarChar(200)
+  customerReceived   Boolean?  // 客户级结果
+  // 后续转化
+  openedTransferPage Boolean   @default(false)
+  firstOpenedAt      DateTime?
+  jumpedToFeice      Boolean   @default(false)
+  jumpedAt           DateTime?
+  enteredCourse      Boolean   @default(false)
+  startedLearning    Boolean   @default(false)
+  completed          Boolean   @default(false)
+  updatedAt          DateTime  @updatedAt
+  createdAt          DateTime  @default(now())
+
+  messageTask        WecomGroupMessageTask @relation(fields: [messageTaskId], references: [id], onDelete: Cascade)
+  roster             CourseRoster          @relation(fields: [rosterEntryId], references: [id], onDelete: Cascade)
+  customer           Customer              @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@unique([messageTaskId, customerId])
+  @@index([customerId])
+  @@map("wecom_group_message_recipients")
+}
+
+// ================================
+// 7. 中转页访问
+// ================================
+
+model TransferPageVisit {
+  id              Int       @id @default(autoincrement())
+  courseId        Int
+  customerId      Int?
+  // 访问信息
+  visitToken      String    @unique @db.VarChar(100) // 每次访问生成
+  userAgent       String?   @db.VarChar(500)
+  clientIp        String?   @db.VarChar(50)
+  // 流程
+  openedAt        DateTime  @default(now())
+  loginMethod     String?   @db.VarChar(20) // sms / account / auto
+  loginSuccessAt  DateTime?
+  stopReminderRequested Boolean @default(false)
+  jumpedToFeiceAt DateTime?
+  feiceEntryUrl   String?   @db.VarChar(500)
+  // 关联提醒任务
+  messageRecipientId Int?
+  createdAt       DateTime  @default(now())
+
+  course          Course    @relation(fields: [courseId], references: [id], onDelete: Cascade)
+  customer        Customer? @relation(fields: [customerId], references: [id])
+
+  @@index([courseId])
+  @@index([customerId])
+  @@map("transfer_page_visits")
+}
+
+// ================================
+// 8. 同步日志 & 审计日志
+// ================================
+
+enum SyncType {
+  WECOM_USERS
+  WECOM_CUSTOMERS
+  WECOM_CUSTOMER_DETAIL
+  FEICE_COURSES
+  FEICE_LIVE_RECORDS
+  FEICE_REPLAY_RECORDS
+  FEICE_INVITE_RECORDS
+  GROUP_MESSAGE_STATUS
+}
+
+model SyncLog {
+  id          Int      @id @default(autoincrement())
+  type        SyncType
+  startedAt   DateTime @default(now())
+  endedAt     DateTime?
+  records     Int      @default(0)
+  success     Boolean?
+  errorMsg    String?  @db.Text
+  cursor      String?  @db.VarChar(500) // 游标/分页信息
+  triggeredBy Int?     // 手动触发的userId
+  triggeredSource String? @default("system") @db.VarChar(20) // system / manual / cron
+  durationMs  Int?
+
+  @@index([type, startedAt])
+  @@map("sync_logs")
+}
+
+model AuditLog {
+  id          Int       @id @default(autoincrement())
+  userId      Int?
+  userName    String?   @db.VarChar(50)
+  action      String    @db.VarChar(50) // login / create_task / exclude_customer / create_group_msg / stop_task ...
+  targetType  String?   @db.VarChar(50) // user / task / roster / message ...
+  targetId    Int?
+  detail      String?   @db.Text         // JSON 变更详情
+  ip          String?   @db.VarChar(50)
+  userAgent   String?   @db.VarChar(500)
+  createdAt   DateTime  @default(now())
+
+  user        User?     @relation(fields: [userId], references: [id])
+
+  @@index([userId, createdAt])
+  @@index([action])
+  @@map("audit_logs")
+}
+
+// ================================
+// 9. 系统配置
+// ================================
+
+model AppConfig {
+  id          Int      @id @default(autoincrement())
+  key         String   @unique @db.VarChar(100)
+  value       String?  @db.Text
+  valueType   String   @default("string") @db.VarChar(20) // string / number / boolean / json
+  updatedBy   Int?
+  updatedAt   DateTime @updatedAt
+  @@map("app_configs")
+}

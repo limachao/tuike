@@ -1,0 +1,71 @@
+version: "3.8"
+
+services:
+  # ============ 数据库 ============
+  postgres:
+    image: postgres:16-alpine
+    container_name: tuike-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER:-tuike}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-tuike123}
+      POSTGRES_DB: ${DB_NAME:-tuike}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    # 不对外暴露端口，只给后端容器访问
+
+  # ============ Redis ============
+  redis:
+    image: redis:7-alpine
+    container_name: tuike-redis
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+
+  # ============ 后端 API ============
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: tuike-backend
+    restart: unless-stopped
+    depends_on:
+      - postgres
+      - redis
+    environment:
+      # 容器内用服务名访问
+      DATABASE_URL: "postgresql://${DB_USER:-tuike}:${DB_PASSWORD:-tuike123}@postgres:5432/${DB_NAME:-tuike}?schema=public"
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_EXPIRES_IN: "7d"
+      WECOM_CORP_ID: ${WECOM_CORP_ID}
+      WECOM_AGENT_ID: ${WECOM_AGENT_ID}
+      WECOM_CONTACT_SECRET: ${WECOM_CONTACT_SECRET}
+      FEICE_APP_ID: ${FEICE_APP_ID}
+      FEICE_APP_SECRET: ${FEICE_APP_SECRET}
+      FEICE_BASE_URL: ${FEICE_BASE_URL}
+      TRANSFER_PAGE_BASE_URL: ${TRANSFER_PAGE_BASE_URL}
+    # 对外暴露后端端口（给前端反代用）
+    # 但实际上前端是容器内反代，不需要暴露到宿主机
+    ports:
+      - "3001:3001"
+
+  # ============ 前端页面（Nginx） ============
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: tuike-frontend
+    restart: unless-stopped
+    depends_on:
+      - backend
+    # 宿主机 8080 → 容器 80
+    # 这样不碰原网站的 80 端口
+    ports:
+      - "8080:80"
+
+volumes:
+  postgres_data:
+  redis_data:

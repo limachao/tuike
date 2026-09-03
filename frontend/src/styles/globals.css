@@ -1,0 +1,136 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ======== 全局基础：Apple macOS 暗色 + 金色点缀 ======== */
+html, body, #root {
+  height: 100%;
+}
+
+html {
+  color-scheme: dark;
+}
+
+body {
+  margin: 0;
+  color: theme('colors.text.primary');
+  font-family: theme('fontFamily.sans');
+  background-color: theme('colors.bg.primary');
+  background-image:
+    radial-gradient(circle at 12% 0%, rgba(212,175,55,0.18), transparent 50%),
+    radial-gradient(circle at 88% 8%, rgba(184,148,31,0.12), transparent 55%),
+    radial-gradient(circle at 50% 100%, rgba(139,123,255,0.06), transparent 60%),
+    linear-gradient(180deg, #080810 0%, #0c0c14 100%);
+  background-attachment: fixed;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* ======== 通用玻璃卡片 ======== */
+@layer components {
+  .glass-card {
+    @apply rounded-xl2 border border-glass-border bg-glass backdrop-blur-xl shadow-glass;
+  }
+  .glass-card-strong {
+    @apply rounded-xl2 border border-glass-borderStrong bg-glass-strong backdrop-blur-2xl shadow-glass;
+  }
+
+  /* 状态标签 */
+  .chip {
+    @apply inline-flex items-center gap-1 rounded-full border border-glass-border bg-white/5 px-2.5 py-1 text-xs text-text-secondary;
+  }
+
+  /* ======== 按钮系统（Apple 风格） ======== */
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2.5 text-sm font-medium tracking-wide transition-all duration-200 active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-40 select-none;
+  }
+
+  /* 主按钮：金色 */
+  .btn-primary {
+    @apply btn text-[#1a1508];
+    background: linear-gradient(145deg, #E8C547 0%, #D4AF37 50%, #B8941F 100%);
+    border: 1px solid rgba(255, 240, 180, 0.40);
+    box-shadow: 0 12px 40px -8px rgba(212,175,55,0.50), 0 4px 16px 0 rgba(212,175,55,0.20);
+  }
+  .btn-primary:hover {
+    background: linear-gradient(145deg, #F0D875 0%, #D9B43E 50%, #BF9A21 100%);
+    box-shadow: 0 16px 48px -8px rgba(212,175,55,0.55), 0 6px 20px 0 rgba(212,175,55,0.25);
+  }
+  .btn-primary:active {
+    background: linear-gradient(145deg, #D4AF37 0%, #B8941F 50%, #947617 100%);
+  }
+
+  /* 次按钮：玻璃透明 */
+  .btn-ghost {
+    @apply btn bg-white/[0.04] text-text-primary hover:bg-white/[0.08] border border-glass-border hover:border-glass-borderStrong;
+  }
+
+  /* 危险按钮 */
+  .btn-danger {
+    @apply btn bg-[#FF5A5F] text-white hover:bg-[#ff4a4f];
+    box-shadow: 0 8px 24px -4px rgba(255,90,95,0.40);
+  }
+
+  /* 成功按钮 */
+  .btn-success {
+    @apply btn bg-[#34D4A5] text-[#082A20] hover:opacity-90;
+    box-shadow: 0 8px 24px -4px rgba(52,212,165,0.40);
+  }
+
+  /* ======== 输入框（磨砂玻璃） ======== */
+  .input {
+    @apply w-full rounded-xl border border-glass-border bg-white/[0.04] px-4 py-2.5 text-sm text-text-primary placeholder:text-text-tertiary outline-none transition-all;
+  }
+  .input:focus {
+    border-color: rgba(212,175,55,0.50);
+    background-color: rgba(212,175,55,0.04);
+    box-shadow: 0 0 0 3px rgba(212,175,55,0.12);
+  }
+
+  .label {
+    @apply mb-1.5 block text-xs font-medium text-text-secondary;
+  }
+  .section-title {
+    @apply text-base font-semibold tracking-tight text-text-primary;
+  }
+  .divider {
+    @apply h-px w-full bg-gradient-to-r from-transparent via-glass-border to-transparent;
+  }
+
+  /* ======== 滚动条（Apple 风格） ======== */
+  .scroll-thin::-webkit-scrollbar {
+    width: 6px; height: 6px;
+  }
+  .scroll-thin::-webkit-scrollbar-thumb {
+    background: rgba(212,175,55,0.22);
+    border-radius: 999px;
+  }
+  .scroll-thin::-webkit-scrollbar-thumb:hover {
+    background: rgba(212,175,55,0.35);
+  }
+}
+
+/* ======== 进度条：金色渐变 ======== */
+.progress-bar {
+  height: 6px;
+  background: rgba(255,255,255,0.06);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.progress-bar > span {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, #947617, #D4AF37 40%, #E8C547 80%, #F0D875);
+  box-shadow: 0 0 12px rgba(212,175,55,0.50);
+  transition: width .3s ease;
+}
+
+/* ======== 应用切换动画 ======== */
+@keyframes fadeInUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.page-enter {
+  animation: fadeInUp .28s ease-out;
+}
