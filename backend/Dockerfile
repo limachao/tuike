@@ -1,7 +1,11 @@
 # ===== 构建阶段 =====
-# 用 Debian slim 而不是 Alpine：bcrypt 有预编译二进制，Prisma 需要的 OpenSSL 也自带
 FROM node:20-slim AS builder
 WORKDIR /app
+
+# 安装编译依赖 + OpenSSL（Prisma 需要）
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3 make g++ openssl libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
 
 # 先装依赖（利用 Docker 缓存）
 COPY package*.json ./
@@ -15,6 +19,11 @@ RUN npx prisma generate && npm run build
 FROM node:20-slim AS runner
 WORKDIR /app
 ENV NODE_ENV=production
+
+# 运行阶段也必须装 OpenSSL（Prisma schema engine 需要）
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    openssl \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/package*.json ./
 COPY --from=builder /app/node_modules ./node_modules
