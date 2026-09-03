@@ -2,6 +2,11 @@
 FROM node:20-slim AS builder
 WORKDIR /app
 
+# 换阿里云 Debian 镜像源 + npm 淘宝镜像（国内服务器速度起飞）
+RUN sed -i 's|deb.debian.org|mirrors.aliyun.com|g; s|security.debian.org|mirrors.aliyun.com/debian-security|g' /etc/apt/sources.list.d/debian.sources 2>/dev/null || \
+    sed -i 's|deb.debian.org|mirrors.aliyun.com|g; s|security.debian.org|mirrors.aliyun.com/debian-security|g' /etc/apt/sources.list 2>/dev/null || true
+RUN npm config set registry https://registry.npmmirror.com
+
 # 安装编译依赖 + OpenSSL（Prisma 需要）
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 make g++ openssl libssl-dev \
@@ -20,7 +25,9 @@ FROM node:20-slim AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 
-# 运行阶段也必须装 OpenSSL（Prisma schema engine 需要）
+# 换源 + 安装 OpenSSL
+RUN sed -i 's|deb.debian.org|mirrors.aliyun.com|g; s|security.debian.org|mirrors.aliyun.com/debian-security|g' /etc/apt/sources.list.d/debian.sources 2>/dev/null || \
+    sed -i 's|deb.debian.org|mirrors.aliyun.com|g; s|security.debian.org|mirrors.aliyun.com/debian-security|g' /etc/apt/sources.list 2>/dev/null || true
 RUN apt-get update && apt-get install -y --no-install-recommends \
     openssl \
     && rm -rf /var/lib/apt/lists/*
