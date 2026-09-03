@@ -2,6 +2,9 @@
 FROM node:20-alpine AS builder
 WORKDIR /app
 
+# bcrypt 是原生模块，需要 Python + 编译工具
+RUN apk add --no-cache python3 make g++
+
 # 先装依赖（利用 Docker 缓存）
 COPY package*.json ./
 RUN npm ci --no-audit --no-fund
