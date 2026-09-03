@@ -1,9 +1,7 @@
 # ===== 构建阶段 =====
-FROM node:20-alpine AS builder
+# 用 Debian slim 而不是 Alpine：bcrypt 有预编译二进制，Prisma 需要的 OpenSSL 也自带
+FROM node:20-slim AS builder
 WORKDIR /app
-
-# bcrypt 是原生模块，需要 Python + 编译工具
-RUN apk add --no-cache python3 make g++
 
 # 先装依赖（利用 Docker 缓存）
 COPY package*.json ./
@@ -14,7 +12,7 @@ COPY . .
 RUN npx prisma generate && npm run build
 
 # ===== 运行阶段 =====
-FROM node:20-alpine AS runner
+FROM node:20-slim AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 
