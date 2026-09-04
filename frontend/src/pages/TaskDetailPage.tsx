@@ -173,6 +173,21 @@ export default function TaskDetailPage() {
               🔗 复制链接
             </button>
             <button onClick={refreshAll} className="btn-ghost">↻ 重算听课</button>
+            <button
+              onClick={async () => {
+                const name = task.course?.name ?? task.taskName ?? `#${task.id}`;
+                if (!window.confirm(`确定删除监控任务「${name}」吗？\n\n该任务的学员名单、听课记录、群发提醒记录都会一并永久删除，无法恢复。`)) return;
+                try {
+                  await api.post(`/courses/tasks/${task.id}/delete`);
+                  nav('/');
+                } catch (e: any) {
+                  alert(e?.response?.data?.message ?? '删除失败，请重试');
+                }
+              }}
+              className="btn-ghost !text-accent-red/90 hover:!bg-accent-red/10"
+            >
+              🗑 删除任务
+            </button>
             <Link to="/feice/sync" className="btn-ghost hidden"></Link>
             <button onClick={openReminder} className="btn-primary">
               ✉ 创建提醒任务

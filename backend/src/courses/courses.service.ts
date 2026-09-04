@@ -285,6 +285,23 @@ export class CoursesService {
     });
   }
 
+  /**
+   * 删除监控任务（创建人本人或主管/超管）。
+   * 名单、群发任务及发送明细均随外键级联删除，不可恢复。
+   */
+  async deleteTask(taskId: number, viewerUserId: number, viewerRole: string) {
+    const task = await this.getTaskIfAllowed(taskId, viewerUserId, viewerRole);
+    await this.prisma.courseMonitoringTask.delete({ where: { id: task.id } });
+    await this.audit.log({
+      userId: viewerUserId,
+      action: 'delete_course_task',
+      targetType: 'task',
+      targetId: taskId,
+      detail: JSON.stringify({ taskName: task.taskName, courseId: task.courseId }),
+    });
+    return { deleted: taskId, taskName: task.taskName };
+  }
+
   /** 权限检查：主管/超管可看全部，销售只能看自己的 */
   async getTaskIfAllowed(taskId: number, viewerUserId: number, viewerRole?: string) {
     const task = await this.prisma.courseMonitoringTask.findUnique({

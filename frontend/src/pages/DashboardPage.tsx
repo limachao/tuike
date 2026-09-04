@@ -51,6 +51,23 @@ export default function DashboardPage() {
 
   useEffect(() => { load(); }, []);
 
+  const [deletingId, setDeletingId] = useState<number | null>(null);
+  const deleteTask = async (e: React.MouseEvent, t: any) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const name = t.course?.name ?? t.taskName ?? `#${t.id}`;
+    if (!window.confirm(`确定删除监控任务「${name}」吗？\n\n该任务的学员名单、听课记录、群发提醒记录都会一并永久删除，无法恢复。`)) return;
+    setDeletingId(t.id);
+    try {
+      await api.post(`/courses/tasks/${t.id}/delete`);
+      await load();
+    } catch (err: any) {
+      alert(err?.response?.data?.message ?? '删除失败，请重试');
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
   const [syncing, setSyncing] = useState(false);
   const sync = async () => {
     setSyncing(true);
@@ -139,10 +156,20 @@ export default function DashboardPage() {
                         </div>
                       </div>
                     </div>
-                    <div className="text-right shrink-0 grid grid-cols-3 gap-3 text-center">
-                      <ChipStat value={t.notEnteredCount ?? 0} label="从未进入" tone="amber" />
-                      <ChipStat value={t.incompleteCount ?? 0} label="听课不足" tone="pink" />
-                      <ChipStat value={t.completedCount ?? 0} label="已完成" tone="mint" />
+                    <div className="flex items-start gap-1 shrink-0">
+                      <div className="text-right grid grid-cols-3 gap-3 text-center">
+                        <ChipStat value={t.notEnteredCount ?? 0} label="从未进入" tone="amber" />
+                        <ChipStat value={t.incompleteCount ?? 0} label="听课不足" tone="pink" />
+                        <ChipStat value={t.completedCount ?? 0} label="已完成" tone="mint" />
+                      </div>
+                      <button
+                        onClick={(e) => deleteTask(e, t)}
+                        disabled={deletingId === t.id}
+                        title="删除任务"
+                        className="mt-1 px-2 py-1 rounded-lg text-text-tertiary hover:text-accent-red hover:bg-accent-red/10 transition text-sm disabled:opacity-40"
+                      >
+                        {deletingId === t.id ? '…' : '🗑'}
+                      </button>
                     </div>
                   </div>
                 </Link>

@@ -45,6 +45,14 @@ export class CoursesController {
     });
   }
 
+  @Post('tasks/:taskId/delete')
+  deleteTask(
+    @Param('taskId') taskId: string,
+    @CurrentUser() u: JwtUserPayload,
+  ) {
+    return this.courses.deleteTask(Number(taskId), u.sub, u.role);
+  }
+
   // ============= 应听名单 =============
   @Get('my-customers')
   listMyCustomers(
