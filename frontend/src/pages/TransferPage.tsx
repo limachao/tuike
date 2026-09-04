@@ -21,6 +21,7 @@ export default function TransferPage() {
   const [authLoading, setAuthLoading] = useState(false);
   const [suffix, setSuffix] = useState('');
   const [suffixLoading, setSuffixLoading] = useState(false);
+  const [wechatReady, setWechatReady] = useState(false);
 
   // 微信内置浏览器才显示「微信一键验证」
   const isWeChat = /MicroMessenger/i.test(navigator.userAgent);
@@ -229,7 +230,7 @@ export default function TransferPage() {
                     验证后系统会自动识别你的听课记录并生成专属课程入口。
                   </div>
                 </div>
-                {isWeChat && (
+                {isWeChat && wechatReady && (
                   <>
                     <button
                       onClick={startWechatAuth}

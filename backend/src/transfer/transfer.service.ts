@@ -167,11 +167,12 @@ export class TransferService {
     });
   }
 
-  /** 微信服务号 OAuth 跳转地址（未配置 AppID 时返回 configured:false，前端隐藏授权按钮） */
+  /** 微信服务号 OAuth 跳转地址（未开启/未配置时返回 configured:false，前端隐藏授权按钮） */
   getWechatAuthUrl(feiceLiveRoomId: string) {
+    const enabled = this.config.get<string>('WECHAT_OAUTH_ENABLED', '');
     const appId = this.config.get<string>('WECHAT_OAUTH_APPID', '');
     const base = this.config.get<string>('TRANSFER_PAGE_BASE_URL', '');
-    if (!appId || !base || !feiceLiveRoomId) {
+    if (enabled !== 'true' || !appId || !base || !feiceLiveRoomId) {
       return { configured: false, url: '' };
     }
     const redirectUri = encodeURIComponent(`${base}/course/${feiceLiveRoomId}`);
@@ -189,10 +190,11 @@ export class TransferService {
     userAgent?: string;
     clientIp?: string;
   }) {
+    const enabled = this.config.get<string>('WECHAT_OAUTH_ENABLED', '');
     const appId = this.config.get<string>('WECHAT_OAUTH_APPID', '');
     const secret = this.config.get<string>('WECHAT_OAUTH_SECRET', '');
-    if (!appId || !secret) {
-      throw new BadRequestException('微信授权未配置，请使用手机号后四位验证');
+    if (enabled !== 'true' || !appId || !secret) {
+      throw new BadRequestException('微信授权暂未开放，请使用手机号后四位验证');
     }
     const url = `https://api.weixin.qq.com/sns/oauth2/access_token?appid=${appId}&secret=${secret}&code=${encodeURIComponent(params.code)}&grant_type=authorization_code`;
     const res = await fetch(url);
