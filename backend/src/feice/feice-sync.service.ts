@@ -193,9 +193,10 @@ export class FeiceSyncService {
       if (now < startTime) status = CourseStatus.NOT_STARTED;
       else if (now > endTime) status = CourseStatus.ENDED;
       else status = CourseStatus.LIVE;
+    } else {
+      // 缺时间信息时，用飞策 liveStatus 兜底（2=已结束）
+      if (Number(item.liveStatus) === 2) status = CourseStatus.ENDED;
     }
-    // liveStatus: 2=已结束（实测）；其余情况以时间推断为准
-    if (Number(item.liveStatus) === 2) status = CourseStatus.ENDED;
     const data: any = {
       name,
       coverUrl: item.coverUrl ?? item.cover_url ?? item.cover ?? null,
@@ -216,14 +217,14 @@ export class FeiceSyncService {
     });
   }
 
-  /** 解析飞策时间字符串 "2026-08-07 19:00:00"（北京时间）为 Date */
+  /** 解析飞策时间字符串 "2026-08-07 19:00:00"（北京时间 UTC+8）为 Date */
   private parseFeiceTime(v: any): Date | null {
     if (!v) return null;
     if (typeof v === 'number') return new Date(v); // 毫秒时间戳
     const s = String(v).trim();
     if (/^\d+$/.test(s)) return new Date(Number(s));
-    // "2026-08-07 19:00:00" → ISO，按服务器本地时区（Asia/Shanghai）解析
-    const iso = s.replace(' ', 'T');
+    // 飞策时间是北京时间（无时区后缀），显式按 UTC+8 解析，避免容器 UTC 时区导致差 8 小时
+    const iso = s.replace(' ', 'T') + '+08:00';
     const d = new Date(iso);
     return isNaN(d.getTime()) ? null : d;
   }
