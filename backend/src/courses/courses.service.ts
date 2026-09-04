@@ -68,7 +68,7 @@ export class CoursesService {
     const list = await this.prisma.customer.findMany({
       where,
       orderBy: { createdAt: 'desc' },
-      take: 2000,
+      take: 20000,
     });
     return { total: list.length, list };
   }
@@ -85,34 +85,31 @@ export class CoursesService {
   async selectAllCustomersToTask(taskId: number, salesUserId: number, viewerRole?: string) {
     const task = await this.getTaskIfAllowed(taskId, salesUserId, viewerRole);
     const { list } = await this.listCustomers(salesUserId, viewerRole || 'SALES');
-    let added = 0;
-    for (const c of list) {
-      try {
-        await this.prisma.courseRoster.create({
-          data: {
-            taskId,
-            customerId: c.id,
-            ownerUserIdAtJoin: salesUserId,
-            joinMethod: 'select_all',
-          },
-        });
-        added++;
-      } catch (e) {
-        // unique conflict -> ignore
-      }
-    }
-    await this.prisma.courseMonitoringTask.update({
-      where: { id: taskId },
-      data: { totalRosterCount: { increment: added } },
+    // 批量插入，已存在的（含之前排除/加入的）自动跳过
+    const result = await this.prisma.courseRoster.createMany({
+      data: list.map((c) => ({
+        taskId,
+        customerId: c.id,
+        ownerUserIdAtJoin: salesUserId,
+        joinMethod: 'select_all' as const,
+      })),
+      skipDuplicates: true,
     });
+    const added = result.count;
+    if (added > 0) {
+      await this.prisma.courseMonitoringTask.update({
+        where: { id: taskId },
+        data: { totalRosterCount: { increment: added } },
+      });
+    }
     await this.audit.log({
       userId: salesUserId,
       action: 'roster_select_all',
       targetType: 'task',
       targetId: taskId,
-      detail: JSON.stringify({ added }),
+      detail: JSON.stringify({ added, pool: list.length }),
     });
-    return { added };
+    return { added, pool: list.length };
   }
 
   /** 单独从任务中排除/移除 */
@@ -227,7 +224,7 @@ export class CoursesService {
   }) {
     const task = await this.getTaskIfAllowed(params.taskId, params.viewerUserId, params.viewerRole);
     const page = params.page ?? 1;
-    const pageSize = Math.min(params.pageSize ?? 50, 200);
+    const pageSize = Math.min(params.pageSize ?? 50, 10000);
 
     const where: any = { taskId: params.taskId };
     if (params.status) where.status = params.status;

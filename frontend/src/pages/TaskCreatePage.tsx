@@ -23,6 +23,14 @@ export default function TaskCreatePage() {
   // 任务创建后返回的 taskId（用于名单操作）
   const [taskId, setTaskId] = useState<number | null>(null);
   const [customers, setCustomers] = useState<any[]>([]);
+  const [rosterTotal, setRosterTotal] = useState(0);
+  const [excludedTotal, setExcludedTotal] = useState(0);
+
+  const applyRosterData = (data: any) => {
+    setRoster(data.list ?? []);
+    setRosterTotal(data.total ?? (data.list ?? []).length);
+    setExcludedTotal(data.task?.excludedCount ?? 0);
+  };
   const [roster, setRoster] = useState<any[]>([]);
   const [keyword, setKeyword] = useState('');
   const [loading, setLoading] = useState(false);
@@ -55,8 +63,10 @@ export default function TaskCreatePage() {
       const { data: cdata } = await api.get('/courses/my-customers');
       setCustomers(cdata.list ?? []);
       // 列表还空，先加载 roster（空）
-      const { data: rdata } = await api.get(`/courses/tasks/${task.id}/roster`);
-      setRoster(rdata.list ?? []);
+      const { data: rdata } = await api.get(`/courses/tasks/${task.id}/roster`, {
+        params: { pageSize: 10000 },
+      });
+      applyRosterData(rdata);
     } catch (e: any) {
       alert(e?.response?.data?.message ?? '创建失败');
     } finally { setLoading(false); }
@@ -68,18 +78,20 @@ export default function TaskCreatePage() {
     try {
       await api.post(`/courses/tasks/${taskId}/select-all`);
       const { data } = await api.get(`/courses/tasks/${taskId}/roster`, {
-        params: { pageSize: 5000 },
+        params: { pageSize: 10000 },
       });
-      setRoster(data.list ?? []);
+      applyRosterData(data);
+    } catch (e: any) {
+      alert(e?.response?.data?.message ?? '全选失败，请重试');
     } finally { setLoading(false); }
   };
 
   const refreshRoster = async () => {
     if (!taskId) return;
     const { data } = await api.get(`/courses/tasks/${taskId}/roster`, {
-      params: { pageSize: 5000 },
+      params: { pageSize: 10000 },
     });
-    setRoster(data.list ?? []);
+    applyRosterData(data);
   };
 
   const toggleExclude = async (entry: any) => {
@@ -94,7 +106,7 @@ export default function TaskCreatePage() {
 
   const finalize = async () => {
     if (!taskId) return;
-    const effective = roster.filter((r) => !r.isExcluded).length;
+    const effective = activeCount;
     if (effective === 0) return alert('应听名单为空');
     if (!confirm(`确认固定应听名单？共 ${effective} 人。确认后名单将作为后续提醒的唯一依据。`)) return;
     await api.post(`/courses/tasks/${taskId}/finalize`);
@@ -111,8 +123,10 @@ export default function TaskCreatePage() {
     );
   }, [roster, keyword]);
 
-  const activeCount = roster.filter((r) => !r.isExcluded).length;
-  const excludedCount = roster.length - activeCount;
+  const activeCount = rosterTotal - excludedTotal;
+  const excludedCount = excludedTotal;
+  // 名单可能有数千人，浏览器一次只渲染前 200 行，用搜索框查找具体学员
+  const visibleRoster = filteredRoster.slice(0, 200);
 
   return (
     <div className="space-y-6">
@@ -215,7 +229,7 @@ export default function TaskCreatePage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredRoster.map((r) => (
+                  {visibleRoster.map((r) => (
                     <tr key={r.id} className={`border-t border-glass-border ${r.isExcluded ? 'opacity-50' : ''}`}>
                       <td className="py-3 pr-4">
                         <div className="flex items-center gap-3">
@@ -257,6 +271,11 @@ export default function TaskCreatePage() {
                   ))}
                 </tbody>
               </table>
+              {filteredRoster.length > visibleRoster.length && (
+                <div className="py-3 text-center text-xs text-text-tertiary">
+                  仅显示前 {visibleRoster.length} 条，共 {filteredRoster.length} 条；在搜索框输入昵称可查找具体学员
+                </div>
+              )}
             </div>
           )}
         </div>
