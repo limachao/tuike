@@ -51,7 +51,7 @@ function get(url) {
   const { PrismaClient } = require('@prisma/client');
   const prisma = new PrismaClient();
   const sales = await prisma.user.findMany({
-    where: { isDeleted: false },
+    where: { isActive: true },
     select: { id: true, name: true, role: true, wecomUserId: true },
   });
   console.log('系统内销售账号绑定情况：');
