@@ -69,7 +69,7 @@ export class WecomSyncService {
     }
   }
 
-  /** 同步指定销售名下的客户（名单+详情） */
+  /** 同步指定销售名下的客户（批量分页拉取详情，7000+ 客户约几分钟） */
   async syncCustomersForSales(salesId: number, triggeredBy?: number) {
     const sales = await this.users.findById(salesId);
     if (!sales?.wecomUserId) {
@@ -84,11 +84,20 @@ export class WecomSyncService {
     });
     let total = 0;
     try {
-      const list = await this.api.listCustomerExternalIds(sales.wecomUserId);
-      for (const item of list) {
-        await this.upsertCustomer(item.external_userid, sales.id);
-        total++;
-      }
+      let cursor: string | undefined;
+      do {
+        const { list, nextCursor } = await this.api.getCustomersByUser(
+          sales.wecomUserId,
+          cursor,
+        );
+        for (const item of list) {
+          const externalUserid = item?.external_contact?.external_userid;
+          if (!externalUserid) continue;
+          await this.upsertCustomer(externalUserid, sales.id, item);
+          total++;
+        }
+        cursor = nextCursor;
+      } while (cursor);
       await this.prisma.syncLog.update({
         where: { id: syncLog.id },
         data: { endedAt: new Date(), records: total, success: true },
@@ -115,18 +124,28 @@ export class WecomSyncService {
     return result;
   }
 
-  private async upsertCustomer(externalUserid: string, salesId: number) {
-    // 查详情（Mock 模式可能为空）
-    let detail: any = null;
-    try {
-      detail = await this.api.getCustomerDetail(externalUserid);
-    } catch (e) {
-      detail = null;
+  /**
+   * 写入/更新客户。detail 可直接传入批量接口返回的单条数据：
+   * batch/get_by_user 条目为 { external_contact, follow_info }
+   * externalcontact/get 返回为 { external_contact, follow_user: [] }
+   * 不传 detail 时回退到逐个查详情（兼容旧调用）
+   */
+  private async upsertCustomer(externalUserid: string, salesId: number, detail?: any) {
+    // 查详情（Mock 模式或未传入时可能为空）
+    if (!detail) {
+      try {
+        detail = await this.api.getCustomerDetail(externalUserid);
+      } catch (e) {
+        detail = null;
+      }
     }
     const contact = detail?.external_contact ?? {};
-    const followInfo = Array.isArray(detail?.follow_user)
-      ? detail.follow_user.find((f: any) => f.userid)
-      : null;
+    // 两种返回结构兼容：follow_info（批量）或 follow_user[]（单个）
+    const followInfo =
+      detail?.follow_info ??
+      (Array.isArray(detail?.follow_user)
+        ? detail.follow_user.find((f: any) => f.userid)
+        : null);
 
     const nickname = contact.name ?? '未命名客户';
     const avatar = contact.avatar ?? null;

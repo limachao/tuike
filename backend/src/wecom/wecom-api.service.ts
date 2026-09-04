@@ -86,20 +86,24 @@ export class WecomApiService implements OnModuleInit {
     return r.external_userid?.map((id: string) => ({ external_userid: id })) ?? [];
   }
 
-  /** 批量获取客户详情 */
-  async getCustomerBatch(externalUserIds: string[], cursor?: string) {
-    if (this.isMock()) return { external_contact_list: [], next_cursor: undefined };
+  /**
+   * 批量获取指定成员的客户详情（含 external_contact + follow_info）
+   * 每页最多 100 条，用 next_cursor 翻页
+   */
+  async getCustomersByUser(
+    userid: string,
+    cursor?: string,
+    limit = 100,
+  ): Promise<{ list: any[]; nextCursor?: string }> {
+    if (this.isMock()) return { list: [] };
     const token = await this.getContactAccessToken();
     const url = `${this.baseUrl}/cgi-bin/externalcontact/batch/get_by_user?access_token=${token}`;
-    const body: any = {
-      userid: 'PLACEHOLDER', // 首期按成员逐个拉取更稳妥
-      external_userid: externalUserIds,
-    };
+    const body: any = { userid, limit };
     if (cursor) body.cursor = cursor;
     const r = await this.requestJson<any>(url, 'POST', body);
     return {
-      external_contact_list: r.external_contact_list ?? [],
-      next_cursor: r.next_cursor,
+      list: r.external_contact_list ?? [],
+      nextCursor: r.next_cursor || undefined,
     };
   }
 

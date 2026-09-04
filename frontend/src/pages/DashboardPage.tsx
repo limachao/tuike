@@ -51,17 +51,25 @@ export default function DashboardPage() {
 
   useEffect(() => { load(); }, []);
 
+  const [syncing, setSyncing] = useState(false);
   const sync = async () => {
+    setSyncing(true);
     try {
       await Promise.all([
         api.post('/feice/sync/courses'),
         api.post('/wecom/sync/my-customers'),
       ]);
-      await api.post('/identity/run-match');
-      await Promise.all(tasks.map((t: any) => api.post(`/attendance/recompute/task/${t.id}`)));
+      // 名单匹配与考勤重算（基于当前已有数据；客户后台同步完可再点一次）
+      try {
+        await api.post('/identity/run-match');
+        await Promise.all(tasks.map((t: any) => api.post(`/attendance/recompute/task/${t.id}`)));
+      } catch {}
       load();
+      alert('课程数据已更新。学员名单较多（数千人），正在后台同步，约3-5分钟后刷新页面即可看到客户数据。');
     } catch (e: any) {
       alert(e?.response?.data?.message ?? '同步失败');
+    } finally {
+      setSyncing(false);
     }
   };
 
@@ -74,7 +82,9 @@ export default function DashboardPage() {
           <h1 className="text-2xl font-semibold tracking-tight">今日待办</h1>
         </div>
         <div className="flex gap-2">
-          <button onClick={sync} className="btn-ghost">↻ 立即同步数据</button>
+          <button onClick={sync} disabled={syncing} className="btn-ghost">
+            {syncing ? '↻ 同步中…' : '↻ 立即同步数据'}
+          </button>
           <Link to="/tasks/new" className="btn-primary">＋ 创建监控任务</Link>
         </div>
       </div>
