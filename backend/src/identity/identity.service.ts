@@ -52,7 +52,8 @@ export class IdentityService {
       if (customerId) {
         await this.prisma.feiceIdentity.update({
           where: { id: id.id },
-          data: { customerId },
+          // unionId/手机号/traceId 均为强标识，系统匹配即视为确认
+          data: { customerId, isConfirmed: true, matchedAt: new Date() },
         });
         updated++;
       } else {
@@ -111,10 +112,18 @@ export class IdentityService {
       });
       if (other) return other.customerId;
     }
-    // 6. mobileHash
+    // 6. mobileHash（飞策记录手机号 sha256 ↔ 企微客户 mobileEncrypted）
     if (id.mobileHash) {
       const c = await this.prisma.customer.findFirst({
         where: { mobileEncrypted: id.mobileHash },
+      });
+      if (c) return c.id;
+    }
+    // 7. unionId（微信 unionId ↔ 企微客户 wecom_unionid）
+    //    实测飞策观看记录里学员 unionId 基本都有、手机号常为空，这是观看记录匹配的主链路
+    if (id.unionId) {
+      const c = await this.prisma.customer.findFirst({
+        where: { wecomUnionid: id.unionId },
       });
       if (c) return c.id;
     }

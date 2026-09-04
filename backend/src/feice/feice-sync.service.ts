@@ -2,6 +2,8 @@ import { Injectable, Logger } from '@nestjs/common';
 import { FeiceApiService } from './feice-api.service';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { CourseStatus } from '@prisma/client';
+import { IdentityService } from '../identity/identity.service';
+import { AttendanceService } from '../attendance/attendance.service';
 import * as crypto from 'crypto';
 
 /**
@@ -17,6 +19,8 @@ export class FeiceSyncService {
   constructor(
     private readonly api: FeiceApiService,
     private readonly prisma: PrismaService,
+    private readonly identity: IdentityService,
+    private readonly attendance: AttendanceService,
   ) {}
 
   /** 同步课程/直播间列表（飞策用 offset，没有 page/pageSize） */
@@ -84,6 +88,7 @@ export class FeiceSyncService {
           cursor: `inserted=${inserted}`,
         },
       });
+      await this.postSyncRefresh(courseId);
       return { total, inserted };
     } catch (e: any) {
       await this.prisma.syncLog.update({
@@ -127,6 +132,7 @@ export class FeiceSyncService {
           cursor: `inserted=${inserted}`,
         },
       });
+      await this.postSyncRefresh(courseId);
       return { total, inserted };
     } catch (e: any) {
       await this.prisma.syncLog.update({
@@ -164,6 +170,7 @@ export class FeiceSyncService {
         where: { id: log.id },
         data: { endedAt: new Date(), records: total, success: true },
       });
+      await this.postSyncRefresh(courseId);
       return { synced: total };
     } catch (e: any) {
       await this.prisma.syncLog.update({
@@ -171,6 +178,30 @@ export class FeiceSyncService {
         data: { endedAt: new Date(), success: false, errorMsg: e?.message },
       });
       throw e;
+    }
+  }
+
+  /**
+   * 同步后刷新：身份关联（飞策 uid/unionId/mobile → 企微客户）+ 听课汇总重算。
+   * 任何一步失败都不影响同步结果（定时任务 15 分钟后还会兜底跑）。
+   */
+  private async postSyncRefresh(courseId?: number) {
+    try {
+      await this.identity.runFullMatch();
+      const tasks = await this.prisma.courseMonitoringTask.findMany({
+        where: { isActive: true, ...(courseId ? { courseId } : {}) },
+        select: { id: true },
+      });
+      for (const t of tasks) {
+        try {
+          await this.attendance.recomputeTask(t.id);
+        } catch (e) {
+          this.logger.warn(`任务#${t.id}听课重算失败: ${(e as Error).message}`);
+        }
+      }
+      this.logger.log(`[Feice] 同步后身份关联+重算完成（课程#${courseId ?? '全部'}，任务${tasks.length}个）`);
+    } catch (e) {
+      this.logger.warn(`同步后身份关联失败: ${(e as Error).message}`);
     }
   }
 
@@ -236,9 +267,13 @@ export class FeiceSyncService {
     const enterStr = enter ? String(enter) : 'x';
     const hashSource = `${uid}|${liveId}|${enterStr}|${item.learningDuration ?? 0}`;
     const recordHash = crypto.createHash('sha1').update(hashSource).digest('hex');
-    // 过滤讲师/助教
-    const userType = String(item.user_type ?? item.userType ?? 'student');
-    const isStudent = !['teacher', 'assistant', 'host'].includes(userType.toLowerCase());
+    // 文档（2026-09-05 实读+实测）：userType 为数字，0=学员 1=助教；兼容历史字符串值
+    const rawUserType = item.user_type ?? item.userType;
+    const utNum = Number(rawUserType);
+    const isStudent = isNaN(utNum)
+      ? !['teacher', 'assistant', 'host'].includes(String(rawUserType ?? '').toLowerCase())
+      : utNum === 0;
+    const userType = isStudent ? 'student' : 'assistant';
 
     try {
       const learningDuration = Number(item.learningDuration ?? 0);
@@ -272,6 +307,8 @@ export class FeiceSyncService {
           rawData: JSON.stringify(item),
         },
       });
+      // 观看记录本身也带 uid/unionId/mobile，同样要建身份（不能只依赖邀课记录）
+      if (isStudent) await this.ensureIdentityFromRecord(item, 'live_record');
       return isStudent;
     } catch (e: any) {
       // unique 冲突 -> 已存在
@@ -285,13 +322,16 @@ export class FeiceSyncService {
     const liveRoomId = String(item.live_room_id ?? item.liveRoomId ?? '');
     const enter = this.normalizeTime(item.enter_time ?? item.enterTime);
     const exit = this.normalizeTime(item.exit_time ?? item.exitTime);
+    // 文档：locate = 本次学习观看最大进度（秒）
     const locate = Number(item.locate ?? 0);
     const hashSource = `${uid}|${liveRoomId}|${enter?.getTime() ?? 0}|${exit?.getTime() ?? 0}|${locate}`;
     const recordHash = crypto.createHash('sha1').update(hashSource).digest('hex');
-    let effectiveSec = 0;
-    if (enter && exit) {
-      effectiveSec = Math.max(0, Math.floor((exit.getTime() - enter.getTime()) / 1000));
-    }
+    const onlineSec = enter && exit
+      ? Math.max(0, Math.floor((exit.getTime() - enter.getTime()) / 1000))
+      : 0;
+    // 有效听课时长：在线时长与观看进度取小，防止挂着不看刷时长；
+    // 缺时间但有进度时直接用进度秒数
+    const effectiveSec = locate > 0 ? Math.min(onlineSec || locate, locate) : onlineSec;
     const thirdPartyStudentId = item.third_party_student_id ?? item.thirdPartyStudentId;
     try {
       await this.prisma.replayWatchRecord.create({
@@ -308,6 +348,7 @@ export class FeiceSyncService {
           rawData: JSON.stringify(item),
         },
       });
+      await this.ensureIdentityFromRecord(item, 'replay_record');
       return true;
     } catch (e: any) {
       if (String(e?.code) === 'P2002') return false;
@@ -385,6 +426,63 @@ export class FeiceSyncService {
     }
   }
 
+  /**
+   * 从任意飞策记录（直播观看/回放观看）提取身份信息，建立或补全 feice_identity。
+   * customerId=0 暂悬，后续由 IdentityService 按 unionId/手机号等匹配到企微客户。
+   * 实测（2026-09-05）：学员观看记录 unionId 基本都有、手机号常为空，
+   * 所以不能只靠邀课记录建身份——观看记录本身也要建。
+   */
+  private async ensureIdentityFromRecord(item: any, source: string) {
+    const uid = item.uid ? String(item.uid) : null;
+    const unionId = item.union_id ?? item.unionId ?? null;
+    const mobile = item.mobile ?? null;
+    const sidRaw = item.third_party_student_id ?? item.thirdPartyStudentId;
+    const thirdPartyStudentId = sidRaw ? String(sidRaw) : null;
+    const tidRaw = item.third_party_trace_id ?? item.thirdPartyTraceId;
+    const thirdPartyTraceId = tidRaw ? String(tidRaw) : null;
+    if (!uid && !unionId && !mobile && !thirdPartyStudentId && !thirdPartyTraceId) return;
+
+    const mobileHash = mobile
+      ? crypto.createHash('sha256').update(String(mobile)).digest('hex')
+      : null;
+
+    const OR: any[] = [
+      uid ? { uid } : null,
+      unionId ? { unionId } : null,
+      thirdPartyStudentId ? { thirdPartyStudentId } : null,
+      thirdPartyTraceId ? { thirdPartyTraceId } : null,
+      mobileHash ? { mobileHash } : null,
+    ].filter(Boolean);
+
+    const existing = await this.prisma.feiceIdentity.findFirst({ where: { OR } });
+    if (!existing) {
+      await this.prisma.feiceIdentity.create({
+        data: {
+          customerId: 0, // 0 代表未匹配；IdentityService 会按优先级补
+          uid,
+          unionId,
+          mobileHash,
+          thirdPartyStudentId,
+          thirdPartyTraceId,
+          matchLevel: thirdPartyTraceId ? 1 : thirdPartyStudentId ? 3 : uid ? 4 : mobile ? 5 : 6,
+          matchSource: source,
+          matchedAt: new Date(),
+        },
+      });
+    } else {
+      await this.prisma.feiceIdentity.update({
+        where: { id: existing.id },
+        data: {
+          uid: uid ?? existing.uid,
+          unionId: unionId ?? existing.unionId,
+          mobileHash: mobileHash ?? existing.mobileHash,
+          thirdPartyStudentId: thirdPartyStudentId ?? existing.thirdPartyStudentId,
+          thirdPartyTraceId: thirdPartyTraceId ?? existing.thirdPartyTraceId,
+        },
+      });
+    }
+  }
+
   // ====== utils ======
   private normalizeDurationSec(v: any): number {
     const n = Number(v ?? 0);
@@ -395,11 +493,18 @@ export class FeiceSyncService {
   }
   private normalizeTime(v: any): Date | null {
     if (!v) return null;
-    const n = Number(v);
+    const s = String(v).trim();
+    const n = Number(s);
     if (!isNaN(n) && n > 1e9) {
       return new Date(n >= 1e12 ? n : n * 1000);
     }
-    const d = new Date(v);
+    // 飞策时间字符串是北京时间（UTC+8，无时区后缀）；容器内时区为 UTC，
+    // 直接 new Date 会慢 8 小时，显式补 +08:00
+    if (/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}/.test(s)) {
+      const d = new Date(s.replace(' ', 'T') + '+08:00');
+      return isNaN(d.getTime()) ? null : d;
+    }
+    const d = new Date(s);
     return isNaN(d.getTime()) ? null : d;
   }
 }

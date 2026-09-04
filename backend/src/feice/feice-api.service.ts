@@ -129,7 +129,11 @@ export class FeiceApiService implements OnModuleInit {
     return { list, total };
   }
 
-  /** 邀课记录列表 */
+  /**
+   * 邀课记录列表 GET /live-manage/open/invitation-record/list
+   * 文档（2026-09-05 实读+实测）：必填时间参数名是 appointmentTime（预约时间戳），
+   * 不是 startTime！传错参数名飞策直接返回 code=-1 操作异常。
+   */
   async listInviteRecords(params: {
     liveRoomId?: string;
     offset?: number;
@@ -143,7 +147,7 @@ export class FeiceApiService implements OnModuleInit {
     const userStart = params.startTime ?? maxPast;
     const extra: Record<string, string> = {
       offset: String(params.offset ?? 0),
-      startTime: String(Math.min(Math.max(userStart, maxPast), now)),
+      appointmentTime: String(Math.min(Math.max(userStart, maxPast), now)),
     };
     if (params.liveRoomId) extra.liveRoomId = params.liveRoomId;
 
@@ -152,10 +156,14 @@ export class FeiceApiService implements OnModuleInit {
     return { list, total: Array.isArray(r.data) ? r.data.length : r.data?.total ?? 0 };
   }
 
-  /** 直播观看记录 GET /live-manage/open/class-record/list */
+  /**
+   * 直播观看记录 GET /live-manage/open/class-record/list
+   * 文档（2026-09-05 实读+实测）：必填时间参数名是 enterClassTime（到课时间戳），
+   * 不是 startTime！可选过滤参数只有 liveRoomId（注意：响应里的直播间字段叫 liveId，
+   * 那是返回值，不能当请求参数传）。
+   */
   async listLiveWatchRecords(params: {
     liveRoomId?: string;
-    liveId?: string;
     offset?: number;
     startTime?: number;
   } = {}) {
@@ -167,17 +175,20 @@ export class FeiceApiService implements OnModuleInit {
     const userStart = params.startTime ?? maxPast;
     const extra: Record<string, string> = {
       offset: String(params.offset ?? 0),
-      startTime: String(Math.min(Math.max(userStart, maxPast), now)),
+      enterClassTime: String(Math.min(Math.max(userStart, maxPast), now)),
     };
     if (params.liveRoomId) extra.liveRoomId = params.liveRoomId;
-    if (params.liveId) extra.liveId = params.liveId;
 
     const r = await this.signedRequest<any>('GET', path, extra);
     const list = Array.isArray(r.data) ? r.data : r.data?.list ?? r.data?.records ?? r.list ?? [];
     return { list, total: Array.isArray(r.data) ? r.data.length : r.data?.total ?? 0 };
   }
 
-  /** 回放观看记录 GET /live-manage/open/live-playback-record/list */
+  /**
+   * 回放观看记录 GET /live-manage/open/live-playback-record/list
+   * 文档（2026-09-05 实读+实测）：必填时间参数名是 exitTime（观看结束时间戳），
+   * 不是 startTime！传错参数名飞策直接返回 code=-1 操作异常。
+   */
   async listReplayWatchRecords(params: {
     liveRoomId?: string;
     offset?: number;
@@ -191,7 +202,7 @@ export class FeiceApiService implements OnModuleInit {
     const userStart = params.startTime ?? maxPast;
     const extra: Record<string, string> = {
       offset: String(params.offset ?? 0),
-      startTime: String(Math.min(Math.max(userStart, maxPast), now)),
+      exitTime: String(Math.min(Math.max(userStart, maxPast), now)),
     };
     if (params.liveRoomId) extra.liveRoomId = params.liveRoomId;
 
