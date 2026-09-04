@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, HttpException, HttpStatus } from '@nestjs/common';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { UserRole, Prisma } from '@prisma/client';
 
@@ -71,5 +71,40 @@ export class UsersService {
       where: { id },
       data: { wecomUserId, hasCustomerContact },
     });
+  }
+
+  /**
+   * 彻底删除账号及其全部相关数据（主管/超管操作）：
+   * - 监控任务及其名单、听课记录、群发任务（级联）
+   * - 该销售名下的客户归属关系（外键级联）
+   * - 审计日志
+   */
+  async deleteUser(id: number, operator: { sub: number; role: string }) {
+    if (id === operator.sub) {
+      throw new HttpException('不能删除自己的账号', HttpStatus.BAD_REQUEST);
+    }
+    const target = await this.findById(id);
+    if (!target) {
+      throw new HttpException('用户不存在', HttpStatus.NOT_FOUND);
+    }
+    if (target.role === 'SUPER_ADMIN') {
+      throw new HttpException('不能删除超级管理员账号', HttpStatus.FORBIDDEN);
+    }
+    if (operator.role === 'SUPERVISOR' && target.role !== 'SALES') {
+      throw new HttpException('主管只能删除销售账号', HttpStatus.FORBIDDEN);
+    }
+    await this.prisma.$transaction([
+      // 残留名单归属记录（挂在他人任务上、以被删账号为归属人的）
+      this.prisma.courseRoster.deleteMany({ where: { ownerUserIdAtJoin: id } }),
+      // 该销售创建的群发任务（含接收明细，级联）
+      this.prisma.wecomGroupMessageTask.deleteMany({ where: { createdBySalesId: id } }),
+      // 该销售创建的监控任务（名单/听课记录/群发任务随之级联删除）
+      this.prisma.courseMonitoringTask.deleteMany({ where: { createdBySalesId: id } }),
+      // 审计日志
+      this.prisma.auditLog.deleteMany({ where: { userId: id } }),
+      // 删除账号（客户归属关系随外键级联删除，客户的 owner 置空）
+      this.prisma.user.delete({ where: { id } }),
+    ]);
+    return { deleted: id, name: target.name };
   }
 }

@@ -52,7 +52,7 @@ function App() {
         <Route
           path="users"
           element={
-            <RequireAuth roles={['SUPER_ADMIN']}>
+            <RequireAuth roles={['SUPERVISOR', 'SUPER_ADMIN']}>
               <UsersPage />
             </RequireAuth>
           }

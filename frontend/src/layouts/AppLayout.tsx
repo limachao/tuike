@@ -6,12 +6,13 @@ const MENU = [
   { to: '/courses', label: '课程库', icon: '◉', roles: ['SALES', 'SUPERVISOR', 'SUPER_ADMIN'] },
   { to: '/tasks/new', label: '新建任务', icon: '＋', roles: ['SUPERVISOR', 'SUPER_ADMIN'] },
   { to: '/reminders', label: '提醒任务', icon: '✉', roles: ['SALES', 'SUPERVISOR', 'SUPER_ADMIN'] },
-  { to: '/users', label: '用户管理', icon: '⚙', roles: ['SUPER_ADMIN'] },
+  { to: '/users', label: '用户管理', icon: '⚙', roles: ['SUPERVISOR', 'SUPER_ADMIN'] },
 ];
 
 export default function AppLayout() {
   const auth = useAuth();
   const loc = useLocation();
+
   return (
     <div className="min-h-screen w-full flex">
       {/* 侧边栏 */}

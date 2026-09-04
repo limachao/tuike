@@ -15,6 +15,10 @@ import { UsersService } from './users.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { Roles } from '../auth/roles.decorator';
 import { RolesGuard } from '../auth/roles.guard';
+import {
+  CurrentUser,
+  JwtUserPayload,
+} from '../common/decorators/current-user.decorator';
 import * as bcrypt from 'bcrypt';
 
 @Controller('users')
@@ -22,9 +26,9 @@ import * as bcrypt from 'bcrypt';
 export class UsersController {
   constructor(private readonly users: UsersService) {}
 
-  /** 列出所有用户（仅 SUPER_ADMIN） */
+  /** 列出所有用户（主管/超管，用于用户管理） */
   @Get()
-  @Roles('SUPER_ADMIN')
+  @Roles('SUPERVISOR', 'SUPER_ADMIN')
   @UseGuards(RolesGuard)
   listAll() {
     return this.users.listAll();
@@ -38,9 +42,9 @@ export class UsersController {
     return this.users.listActiveSales();
   }
 
-  /** 创建新用户（仅 SUPER_ADMIN） */
+  /** 创建新用户（主管/超管） */
   @Post()
-  @Roles('SUPER_ADMIN')
+  @Roles('SUPERVISOR', 'SUPER_ADMIN')
   @UseGuards(RolesGuard)
   async create(
     @Body() body: { phone: string; name: string; password: string; role?: 'SALES' | 'SUPERVISOR' },
@@ -58,9 +62,9 @@ export class UsersController {
     });
   }
 
-  /** 修改用户（仅 SUPER_ADMIN） */
+  /** 修改用户（主管/超管） */
   @Patch(':id')
-  @Roles('SUPER_ADMIN')
+  @Roles('SUPERVISOR', 'SUPER_ADMIN')
   @UseGuards(RolesGuard)
   async update(
     @Param('id') id: string,
@@ -74,15 +78,15 @@ export class UsersController {
     return this.users.update(Number(id), data);
   }
 
-  /** 软删除用户（仅 SUPER_ADMIN） */
+  /** 彻底删除销售账号及其全部相关数据（主管/超管） */
   @Delete(':id')
-  @Roles('SUPER_ADMIN')
+  @Roles('SUPERVISOR', 'SUPER_ADMIN')
   @UseGuards(RolesGuard)
-  remove(@Param('id') id: string) {
-    return this.users.update(Number(id), { isActive: false });
+  remove(@Param('id') id: string, @CurrentUser() u: JwtUserPayload) {
+    return this.users.deleteUser(Number(id), { sub: u.sub, role: u.role });
   }
 
-  /** 绑定企微 userid（主管/超管） */
+  /** 绑定企微 userid（主管/超管；销售无权绑定） */
   @Patch(':id/bind-wecom')
   @Roles('SUPERVISOR', 'SUPER_ADMIN')
   @UseGuards(RolesGuard)

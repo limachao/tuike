@@ -26,6 +26,9 @@ export default function UsersPage() {
   const [showForm, setShowForm] = useState(false);
   const [editing, setEditing] = useState<UserRow | null>(null);
   const [form, setForm] = useState({ phone: '', name: '', password: '', role: 'SALES' as Role });
+  const [bindTarget, setBindTarget] = useState<UserRow | null>(null);
+  const [bindId, setBindId] = useState('');
+  const [bindBusy, setBindBusy] = useState(false);
 
   const load = async () => {
     try {
@@ -81,12 +84,37 @@ export default function UsersPage() {
     alert('已重置为 123456');
   };
 
+  const doBind = async () => {
+    if (!bindTarget || !bindId) return;
+    setBindBusy(true);
+    try {
+      await api.patch(`/users/${bindTarget.id}/bind-wecom`, { wecomUserId: bindId });
+      setBindTarget(null);
+      load();
+    } catch (e: any) {
+      alert(e.response?.data?.message || '绑定失败，请检查 userid 是否正确');
+    } finally {
+      setBindBusy(false);
+    }
+  };
+
+  const doDelete = async (u: UserRow) => {
+    if (!confirm(`确认彻底删除「${u.name}」的账号？\n\n将同时删除其名下的监控任务、学员名单、听课记录等全部数据，且不可恢复！`)) return;
+    try {
+      await api.delete(`/users/${u.id}`);
+      alert(`已删除「${u.name}」的账号及相关数据`);
+      load();
+    } catch (e: any) {
+      alert(e.response?.data?.message || '删除失败');
+    }
+  };
+
   return (
     <div className="page-enter space-y-6">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">用户管理</h1>
-          <p className="text-sm text-text-tertiary mt-1">仅超级管理员可操作 · 管理系统内所有账号</p>
+          <p className="text-sm text-text-tertiary mt-1">管理销售账号 · 绑定企业微信 ID · 删除账号及其数据</p>
         </div>
         <button className="btn-primary" onClick={openNew}>+ 新增账号</button>
       </div>
@@ -120,7 +148,11 @@ export default function UsersPage() {
                     </span>
                   </td>
                   <td className="px-5 py-3 text-text-tertiary">
-                    {u.wecomUserId ? <span className="text-accent-mint">已绑定</span> : '未绑定'}
+                    {u.wecomUserId ? (
+                      <span className="text-accent-mint">{u.wecomUserId}</span>
+                    ) : (
+                      <span className="text-accent-red/80">未绑定</span>
+                    )}
                   </td>
                   <td className="px-5 py-3">
                     {u.isActive ? (
@@ -132,7 +164,13 @@ export default function UsersPage() {
                   <td className="px-5 py-3 text-text-tertiary">
                     {u.lastLoginAt ? new Date(u.lastLoginAt).toLocaleString('zh-CN') : '—'}
                   </td>
-                  <td className="px-5 py-3 text-right space-x-2">
+                  <td className="px-5 py-3 text-right space-x-2 whitespace-nowrap">
+                    <button
+                      className="text-brand-400 hover:text-brand-300"
+                      onClick={() => { setBindTarget(u); setBindId(u.wecomUserId ?? ''); }}
+                    >
+                      {u.wecomUserId ? '换绑' : '绑定ID'}
+                    </button>
                     <button className="text-brand-400 hover:text-brand-300" onClick={() => openEdit(u)}>编辑</button>
                     <button className="text-text-secondary hover:text-text-primary" onClick={() => resetPassword(u)}>重置密码</button>
                     <button
@@ -141,6 +179,11 @@ export default function UsersPage() {
                     >
                       {u.isActive ? '停用' : '启用'}
                     </button>
+                    {u.role !== 'SUPER_ADMIN' && (
+                      <button className="text-accent-red hover:text-red-400 font-medium" onClick={() => doDelete(u)}>
+                        删除
+                      </button>
+                    )}
                   </td>
                 </tr>
               ))}
@@ -196,6 +239,32 @@ export default function UsersPage() {
             <div className="flex gap-3 justify-end mt-6">
               <button className="btn-ghost" onClick={() => setShowForm(false)}>取消</button>
               <button className="btn-primary" onClick={submit}>{editing ? '保存修改' : '创建账号'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 绑定企微 ID 弹窗 */}
+      {bindTarget && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 grid place-items-center" onClick={() => setBindTarget(null)}>
+          <div className="glass-card-strong w-[440px] p-6" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-lg font-semibold mb-1">绑定企业微信 ID</h3>
+            <p className="text-xs text-text-tertiary mb-4 leading-relaxed">
+              为「{bindTarget.name}」绑定企微 userid，绑定后该账号登录即可看到自己名下的学员。
+              userid 在企业微信管理后台「通讯录」→ 对应成员详情 →「账号」字段查看。
+            </p>
+            <input
+              className="input"
+              value={bindId}
+              onChange={(e) => setBindId(e.target.value.trim())}
+              placeholder="输入企微 userid，如 zhangsan"
+              onKeyDown={(e) => e.key === 'Enter' && doBind()}
+            />
+            <div className="flex gap-3 justify-end mt-6">
+              <button className="btn-ghost" onClick={() => setBindTarget(null)}>取消</button>
+              <button className="btn-primary" disabled={bindBusy || !bindId} onClick={doBind}>
+                {bindBusy ? '绑定中…' : '确认绑定'}
+              </button>
             </div>
           </div>
         </div>
