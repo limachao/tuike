@@ -29,7 +29,11 @@ async function call(path, extra) {
   const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
   const text = await res.text();
   console.log('<<< HTTP', res.status);
-  console.log(text.slice(0, 3000));
+  // 中文转 unicode 转义输出，避免终端方块乱码
+  const escaped = text.replace(/[\u007f-\uffff]/g, (c) =>
+    '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0'),
+  );
+  console.log(escaped.slice(0, 3000));
   console.log('');
   try { return JSON.parse(text); } catch { return null; }
 }
