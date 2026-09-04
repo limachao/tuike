@@ -159,6 +159,19 @@ export default function TaskDetailPage() {
             </div>
           </div>
           <div className="flex gap-2">
+            <button
+              onClick={() => {
+                const url = `${window.location.origin}/course/${task.feiceLiveRoomId}`;
+                navigator.clipboard
+                  .writeText(url)
+                  .then(() => alert('推课链接已复制，可直接在微信私发给学员：\n\n' + url))
+                  .catch(() => prompt('复制下方链接发给学员：', url));
+              }}
+              className="btn-ghost"
+              title="复制后可在微信中一对一私发给学员，不受企微群发每日一条的限制"
+            >
+              🔗 复制链接
+            </button>
             <button onClick={refreshAll} className="btn-ghost">↻ 重算听课</button>
             <Link to="/feice/sync" className="btn-ghost hidden"></Link>
             <button onClick={openReminder} className="btn-primary">
