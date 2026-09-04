@@ -7,6 +7,7 @@ import {
   Query,
 } from '@nestjs/common';
 import { FeiceSyncService } from './feice-sync.service';
+import { FeiceInviteService } from './feice-invite.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import {
   CurrentUser,
@@ -19,6 +20,7 @@ import { PrismaService } from '../common/prisma/prisma.service';
 export class FeiceController {
   constructor(
     private readonly sync: FeiceSyncService,
+    private readonly invite: FeiceInviteService,
     private readonly prisma: PrismaService,
   ) {}
 
@@ -62,5 +64,18 @@ export class FeiceController {
       orderBy: { startTime: 'desc' },
       take: 100,
     });
+  }
+
+  /** 内部员工观看课程/回放：生成飞策入口链接并新窗口打开 */
+  @Get('courses/:id/play-link')
+  async getPlayLink(@Param('id') id: string, @CurrentUser() u: JwtUserPayload) {
+    const course = await this.prisma.course.findUniqueOrThrow({
+      where: { id: Number(id) },
+    });
+    const r = await this.invite.buildInternalPlayUrl({
+      liveRoomId: course.feiceLiveRoomId,
+      userId: u.sub,
+    });
+    return { url: r.url };
   }
 }

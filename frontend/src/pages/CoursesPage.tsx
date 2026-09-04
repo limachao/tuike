@@ -7,6 +7,7 @@ export default function CoursesPage() {
   const nav = useNavigate();
   const [list, setList] = useState<any[]>([]);
   const [kw, setKw] = useState('');
+  const [playingId, setPlayingId] = useState<number | null>(null);
 
   const load = async () => {
     const { data } = await api.get('/feice/courses', { params: { keyword: kw || undefined } });
@@ -19,6 +20,31 @@ export default function CoursesPage() {
   };
 
   useEffect(() => { load(); }, [kw]);
+
+  const playLabel = (s: string) => {
+    switch (s) {
+      case 'LIVE': return '● 进入直播';
+      case 'ENDED':
+      case 'REPLAY_ONLY': return '▶ 观看回放';
+      default: return '▶ 进入课堂';
+    }
+  };
+
+  const play = async (c: any) => {
+    setPlayingId(c.id);
+    try {
+      const { data } = await api.get(`/feice/courses/${c.id}/play-link`);
+      if (data?.url) {
+        window.open(data.url, '_blank');
+      } else {
+        alert('未获取到观看链接，请稍后重试');
+      }
+    } catch (e: any) {
+      alert(e?.response?.data?.message ?? '获取链接失败，请稍后重试');
+    } finally {
+      setPlayingId(null);
+    }
+  };
 
   const statusTone = (s: string) => {
     switch (s) {
@@ -80,12 +106,21 @@ export default function CoursesPage() {
                   {c.startTime && <div>开课：{dayjs(c.startTime).format('YYYY-MM-DD HH:mm')}</div>}
                   {c.totalDuration > 0 && <div>课程时长：{Math.round(c.totalDuration/60)} 分钟</div>}
                 </div>
-                <button
-                  onClick={() => nav(`/tasks/new?courseId=${c.id}`)}
-                  className="btn-primary w-full mt-auto"
-                >
-                  建立监控任务
-                </button>
+                <div className="flex gap-2 mt-auto">
+                  <button
+                    onClick={() => play(c)}
+                    disabled={playingId === c.id}
+                    className="btn-primary flex-1"
+                  >
+                    {playingId === c.id ? '生成中…' : playLabel(c.status)}
+                  </button>
+                  <button
+                    onClick={() => nav(`/tasks/new?courseId=${c.id}`)}
+                    className="btn-ghost flex-1"
+                  >
+                    建立监控任务
+                  </button>
+                </div>
               </div>
             </div>
           ))}
