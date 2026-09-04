@@ -1,7 +1,6 @@
 /**
- * 临时验证脚本：对指定直播间调用飞策邀课链接接口
- * 用法：node scripts/test-invite-link.js <liveRoomId>
- * 通过 stdin 注入容器运行：docker compose exec -T backend node - < scripts/test-invite-link.js 1639796
+ * 临时验证脚本：验证飞策邀课链接接口对已结束直播间的行为
+ * 用法：node scripts/test-invite-link.js <liveRoomId> [mobile]
  */
 const crypto = require('crypto');
 
@@ -30,22 +29,51 @@ async function call(path, extra) {
   const res = await fetch(url, { signal: AbortSignal.timeout(15000) });
   const text = await res.text();
   console.log('<<< HTTP', res.status);
-  console.log(text.slice(0, 2000));
+  console.log(text.slice(0, 3000));
   console.log('');
+  try { return JSON.parse(text); } catch { return null; }
 }
 
 (async () => {
   const liveRoomId = process.argv[2] || '1639796';
+  const givenMobile = process.argv[3];
   if (!appId || !appSecret) {
-    console.error('缺少 FEICE_APP_ID / FEICE_APP_SECRET 环境变量');
+    console.error('缺少 FEICE_APP_ID / FEICE_APP_SECRET');
     process.exit(1);
   }
-  console.log('=== 邀课链接接口测试 liveRoomId=' + liveRoomId + ' ===\n');
-  await call('/live-manage/open/invitation-link/list', {
-    liveRoomId,
-    mobile: '13800000000',
-    thirdPartyTraceId: 'internal_test_001',
+  const now = Date.now();
+  const startTime = String(now - 29 * 24 * 3600 * 1000);
+
+  if (givenMobile) {
+    // 直接用指定手机号测试
+    await call('/live-manage/open/invitation-link/list', {
+      liveRoomId, mobile: givenMobile, thirdPartyTraceId: 'internal_test_002',
+    });
+    return;
+  }
+
+  // 第 1 步：查邀课记录，找真实学员标识
+  console.log('=== 第1步：查询该直播间的邀课记录 ===\n');
+  const rec = await call('/live-manage/open/invitation-record/list', {
+    liveRoomId, offset: '0', startTime,
   });
+  const recList = Array.isArray(rec?.data) ? rec.data : rec?.data?.list ?? [];
+  console.log('邀课记录数量：', recList.length);
+  if (recList[0]) console.log('第一条记录字段：', JSON.stringify(recList[0]).slice(0, 800), '\n');
+
+  // 第 2 步：用记录里的真实手机号/userId 生成邀课链接
+  const first = recList[0];
+  const mobile = first?.mobile ?? first?.userMobile ?? first?.phone;
+  const userId = first?.userId ?? first?.uid;
+  if (!mobile && !userId) {
+    console.log('!! 邀课记录里没有 mobile/userId 字段，请用真实手机号作为第2个参数重跑：node scripts/test-invite-link.js ' + liveRoomId + ' <真实手机号>');
+    return;
+  }
+  console.log('=== 第2步：用真实学员生成邀课链接 (mobile=' + mobile + ', userId=' + userId + ') ===\n');
+  const params = { liveRoomId, thirdPartyTraceId: 'internal_test_003' };
+  if (userId) params.userId = String(userId);
+  if (mobile) params.mobile = String(mobile);
+  await call('/live-manage/open/invitation-link/list', params);
 })().catch((e) => {
   console.error('请求失败：', e.message);
   process.exit(1);
