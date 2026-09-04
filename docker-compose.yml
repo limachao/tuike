@@ -49,6 +49,7 @@ services:
       TRANSFER_PAGE_BASE_URL: ${TRANSFER_PAGE_BASE_URL}
       WECHAT_OAUTH_APPID: ${WECHAT_OAUTH_APPID:-}
       WECHAT_OAUTH_SECRET: ${WECHAT_OAUTH_SECRET:-}
+      BACKEND_PORT: "3001"
     # 对外暴露后端端口（给前端反代用）
     # 但实际上前端是容器内反代，不需要暴露到宿主机
     ports:
