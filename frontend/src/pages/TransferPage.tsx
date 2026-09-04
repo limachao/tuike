@@ -16,12 +16,14 @@ export default function TransferPage() {
   const tokenFromQuery = sp.get('token');
 
   const [boot, setBoot] = useState<any>(null);
-  const [mobile, setMobile] = useState('');
-  const [code, setCode] = useState('');
-  const [sending, setSending] = useState(false);
-  const [codeCountdown, setCodeCountdown] = useState(0);
   const [enterLoading, setEnterLoading] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  const [authLoading, setAuthLoading] = useState(false);
+  const [suffix, setSuffix] = useState('');
+  const [suffixLoading, setSuffixLoading] = useState(false);
+
+  // 微信内置浏览器才显示「微信一键验证」
+  const isWeChat = /MicroMessenger/i.test(navigator.userAgent);
 
   const showToast = (msg: string) => {
     setToast(msg);
@@ -44,35 +46,64 @@ export default function TransferPage() {
     bootstrap(t);
   }, [feiceLiveRoomId]);
 
+  // 微信授权回调：URL 带 ?code= 时自动换取身份
   useEffect(() => {
-    if (codeCountdown <= 0) return;
-    const t = setTimeout(() => setCodeCountdown(codeCountdown - 1), 1000);
-    return () => clearTimeout(t);
-  }, [codeCountdown]);
+    const wxCode = sp.get('code');
+    if (!wxCode || !feiceLiveRoomId) return;
+    (async () => {
+      setAuthLoading(true);
+      try {
+        const { data } = await transferApi.post('/wechat-login', { code: wxCode, roomId: feiceLiveRoomId });
+        if (data?.matched) {
+          localStorage.setItem(`tk_transfer_token_${feiceLiveRoomId}`, data.visitToken);
+          showToast('微信验证成功');
+          bootstrap(data.visitToken);
+        } else {
+          showToast(data?.message ?? '未识别到学员身份，请用手机号后四位验证');
+        }
+      } catch (e: any) {
+        showToast(e?.response?.data?.message ?? '微信验证失败');
+      } finally {
+        setAuthLoading(false);
+      }
+    })();
+  }, []);
 
-  const sendCode = async () => {
-    if (!/^1\d{10}$/.test(mobile)) return showToast('请输入正确手机号');
-    setSending(true);
+  /** 跳转微信服务号 OAuth 授权页 */
+  const startWechatAuth = async () => {
+    setAuthLoading(true);
     try {
-      const { data } = await transferApi.post('/send-sms', { mobile });
-      if (data?.codeInDev) showToast(`开发环境验证码：${data.codeInDev}`);
-      else showToast('验证码已发送');
-      setCodeCountdown(60);
-    } catch (e: any) { showToast(e?.response?.data?.message ?? '发送失败'); }
-    finally { setSending(false); }
+      const { data } = await transferApi.get('/wechat-auth-url', { params: { roomId: feiceLiveRoomId } });
+      if (data?.configured && data?.url) {
+        location.href = data.url;
+        return;
+      }
+      showToast('微信授权暂未配置，请用手机号后四位验证');
+    } catch (e: any) {
+      showToast(e?.response?.data?.message ?? '获取授权失败');
+    } finally {
+      setAuthLoading(false);
+    }
   };
 
-  const login = async () => {
-    if (!/^1\d{10}$/.test(mobile)) return showToast('请输入正确手机号');
-    if (code.length < 4) return showToast('请输入验证码');
+  /** 兜底：手机号后四位验证 */
+  const loginBySuffix = async () => {
+    if (suffix.length !== 4) return showToast('请输入手机号后四位');
+    setSuffixLoading(true);
     try {
-      const { data } = await transferApi.post('/login', {
-        method: 'sms', mobile, code, feiceLiveRoomId: feiceLiveRoomId!,
-      });
-      localStorage.setItem(`tk_transfer_token_${feiceLiveRoomId}`, data.visitToken);
-      showToast('验证成功');
-      bootstrap(data.visitToken);
-    } catch (e: any) { showToast(e?.response?.data?.message ?? '验证失败'); }
+      const { data } = await transferApi.post('/login-suffix', { suffix, roomId: feiceLiveRoomId });
+      if (data?.matched) {
+        localStorage.setItem(`tk_transfer_token_${feiceLiveRoomId}`, data.visitToken);
+        showToast('验证成功');
+        bootstrap(data.visitToken);
+      } else {
+        showToast(data?.message ?? '未匹配到学员，请联系销售老师');
+      }
+    } catch (e: any) {
+      showToast(e?.response?.data?.message ?? '验证失败');
+    } finally {
+      setSuffixLoading(false);
+    }
   };
 
   const enterCourse = async () => {
@@ -81,7 +112,11 @@ export default function TransferPage() {
     setEnterLoading(true);
     try {
       const { data } = await transferApi.post(`/course/${feiceLiveRoomId}/enter`, { visitToken: token });
-      if (data?.feiceUrl) location.href = data.feiceUrl;
+      if (data?.feiceUrl?.url) {
+        location.href = data.feiceUrl.url;
+      } else {
+        showToast('暂未获取到课程入口，请联系销售老师');
+      }
     } catch (e: any) { showToast(e?.response?.data?.message ?? '跳转失败'); }
     finally { setEnterLoading(false); }
   };
@@ -191,29 +226,42 @@ export default function TransferPage() {
                 <div>
                   <div className="text-xl font-semibold tracking-tight">身份验证</div>
                   <div className="text-sm text-text-secondary mt-1">
-                    输入手机号后，系统会识别你的听课记录并生成专属课程入口。
+                    验证后系统会自动识别你的听课记录并生成专属课程入口。
                   </div>
                 </div>
-                <div>
-                  <label className="label">手机号</label>
-                  <input className="input" inputMode="numeric"
-                    value={mobile} onChange={(e) => setMobile(e.target.value)} />
-                </div>
-                <div>
-                  <label className="label">验证码</label>
-                  <div className="flex gap-2">
-                    <input className="input" inputMode="numeric"
-                      value={code} onChange={(e) => setCode(e.target.value)} />
+                {isWeChat && (
+                  <>
                     <button
-                      onClick={sendCode}
-                      disabled={sending || codeCountdown > 0}
-                      className="btn-ghost shrink-0 whitespace-nowrap"
+                      onClick={startWechatAuth}
+                      disabled={authLoading}
+                      className="btn-primary w-full py-4 text-base !rounded-2xl"
                     >
-                      {codeCountdown > 0 ? `${codeCountdown}s 后重发` : sending ? '发送中…' : '发送验证码'}
+                      {authLoading ? '正在跳转…' : '微信一键验证'}
                     </button>
-                  </div>
+                    <div className="divider" />
+                    <div className="text-xs text-text-secondary text-center">
+                      无法自动识别？用手机号后四位验证
+                    </div>
+                  </>
+                )}
+                <div>
+                  <label className="label">手机号后四位</label>
+                  <input
+                    className="input"
+                    inputMode="numeric"
+                    maxLength={4}
+                    placeholder="如 8888"
+                    value={suffix}
+                    onChange={(e) => setSuffix(e.target.value.replace(/\D/g, ''))}
+                  />
                 </div>
-                <button onClick={login} className="btn-primary w-full py-3">验证并进入</button>
+                <button
+                  onClick={loginBySuffix}
+                  disabled={suffixLoading}
+                  className="btn-primary w-full py-3"
+                >
+                  {suffixLoading ? '验证中…' : '验证并进入'}
+                </button>
                 <div className="text-[11px] text-text-tertiary leading-relaxed">
                   点击验证即代表你同意我们使用手机号进行身份匹配，用于记录课程学习进度并提供后续提醒服务。
                   你可以在本页一键停止后续提醒。
@@ -254,7 +302,7 @@ export default function TransferPage() {
                 <div className="text-[11px] text-text-tertiary space-y-2">
                   <div className="flex gap-2 items-start">
                     <span className="mt-0.5">🛡</span>
-                    <span>本页使用 HTTPS，手机号与验证码仅用于身份识别，不会被第三方用于其他用途。</span>
+                    <span>本页使用 HTTPS，微信授权与手机号仅用于身份识别，不会被第三方用于其他用途。</span>
                   </div>
                   <div className="flex gap-2 items-start">
                     <span className="mt-0.5">⚙</span>

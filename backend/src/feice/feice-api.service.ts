@@ -207,9 +207,40 @@ export class FeiceApiService implements OnModuleInit {
     };
   }
 
-  /** 生成邀课链接（待飞策提供接口路径） */
-  async generateInviteUrl(_params: any = {}) {
-    return { url: '', thirdPartyTraceId: '' };
+  /**
+   * 获取邀课链接 GET /live-manage/open/invitation-link/list
+   * 文档（2026-09-04 实读）：
+   *  - liveRoomId 必填；userId/mobile 不能同时为空（都传以 userId 为准）
+   *  - thirdPartyTraceId 选填（≤32位），飞策会自动拼到邀课链接上用于透传
+   *  - 响应 data[]: { liveRoomId, inviteLink, tagName, tags[], createdDt, updatedDt }
+   */
+  async generateInviteUrl(params: {
+    liveRoomId: string;
+    userId?: string;
+    mobile?: string;
+    thirdPartyTraceId?: string;
+  }) {
+    if (this.isMock()) {
+      return {
+        url: `https://example.com/mock-invite?thirdPartyTraceId=${params.thirdPartyTraceId ?? ''}`,
+        thirdPartyTraceId: params.thirdPartyTraceId ?? '',
+      };
+    }
+    if (!params.userId && !params.mobile) {
+      throw new Error('获取邀课链接需要飞策 userId 或 mobile 至少一个');
+    }
+    const extra: Record<string, string> = { liveRoomId: params.liveRoomId };
+    if (params.userId) extra.userId = params.userId;
+    if (params.mobile) extra.mobile = params.mobile;
+    if (params.thirdPartyTraceId) extra.thirdPartyTraceId = params.thirdPartyTraceId.slice(0, 32);
+
+    const r = await this.signedRequest<any>('GET', '/live-manage/open/invitation-link/list', extra);
+    const list = Array.isArray(r.data) ? r.data : r.data?.list ?? [];
+    const item = list[0];
+    if (!item?.inviteLink) {
+      throw new Error('飞策未返回邀课链接（该直播间可能尚未创建邀课链接）');
+    }
+    return { url: item.inviteLink, thirdPartyTraceId: params.thirdPartyTraceId ?? '' };
   }
 
   // ========== 通用请求（带签名） ==========

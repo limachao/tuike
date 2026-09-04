@@ -11,11 +11,15 @@ export class FeiceInviteService {
 
   async buildEntryUrl(params: {
     liveRoomId: string;
-    thirdPartyTraceId: string;
-    nickname?: string;
+    thirdPartyTraceId?: string;
+    userId?: string;
     mobile?: string;
-    entryType?: 'live' | 'replay';
   }) {
-    return this.api.generateInviteUrl(params);
+    return this.api.generateInviteUrl({
+      liveRoomId: params.liveRoomId,
+      thirdPartyTraceId: params.thirdPartyTraceId,
+      userId: params.userId,
+      mobile: params.mobile,
+    });
   }
 }

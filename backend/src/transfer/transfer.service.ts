@@ -4,6 +4,7 @@ import {
   NotFoundException,
   Logger,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { RedisService } from '../common/redis/redis.service';
 import { FeiceInviteService } from '../feice/feice-invite.service';
@@ -30,6 +31,7 @@ export class TransferService {
     private readonly prisma: PrismaService,
     private readonly redis: RedisService,
     private readonly feice: FeiceInviteService,
+    private readonly config: ConfigService,
   ) {}
 
   /** 中转页首屏加载：返回课程基本信息 + 当前登录态 + 完成状态 */
@@ -151,44 +153,170 @@ export class TransferService {
         },
       });
     }
-    // 记录 visit
+    // 记录 visit + 颁发轻量登录 token（存 Redis 24h）
     const course = await this.prisma.course.findFirstOrThrow({
       where: { feiceLiveRoomId: params.feiceLiveRoomId },
     });
+    return this.issueLoginToken({
+      course,
+      customer,
+      loginMethod: 'sms',
+      userAgent: params.userAgent,
+      clientIp: params.clientIp,
+      messageRecipientId: params.messageRecipientId,
+    });
+  }
+
+  /** 微信服务号 OAuth 跳转地址（未配置 AppID 时返回 configured:false，前端隐藏授权按钮） */
+  getWechatAuthUrl(feiceLiveRoomId: string) {
+    const appId = this.config.get<string>('WECHAT_OAUTH_APPID', '');
+    const base = this.config.get<string>('TRANSFER_PAGE_BASE_URL', '');
+    if (!appId || !base || !feiceLiveRoomId) {
+      return { configured: false, url: '' };
+    }
+    const redirectUri = encodeURIComponent(`${base}/course/${feiceLiveRoomId}`);
+    const state = encodeURIComponent(feiceLiveRoomId);
+    return {
+      configured: true,
+      url: `https://open.weixin.qq.com/connect/oauth2/authorize?appid=${appId}&redirect_uri=${redirectUri}&response_type=code&scope=snsapi_userinfo&state=${state}#wechat_redirect`,
+    };
+  }
+
+  /** 微信授权回调登录：code 换 unionid → 匹配企微客户 → 颁发登录态 */
+  async wechatLogin(params: {
+    code: string;
+    feiceLiveRoomId: string;
+    userAgent?: string;
+    clientIp?: string;
+  }) {
+    const appId = this.config.get<string>('WECHAT_OAUTH_APPID', '');
+    const secret = this.config.get<string>('WECHAT_OAUTH_SECRET', '');
+    if (!appId || !secret) {
+      throw new BadRequestException('微信授权未配置，请使用手机号后四位验证');
+    }
+    const url = `https://api.weixin.qq.com/sns/oauth2/access_token?appid=${appId}&secret=${secret}&code=${encodeURIComponent(params.code)}&grant_type=authorization_code`;
+    const res = await fetch(url);
+    const data: any = await res.json().catch(() => ({}));
+    if (data.errcode) {
+      this.logger.warn(
+        `[WechatOAuth] code 换取失败 errcode=${data.errcode} errmsg=${data.errmsg}`,
+      );
+      throw new BadRequestException('微信授权已过期，请重新点击授权');
+    }
+    const unionid = data.unionid as string | undefined;
+    if (!unionid) {
+      return { ok: true, matched: false, message: '未获取到微信身份，请使用手机号后四位验证' };
+    }
+    const customer = await this.prisma.customer.findUnique({
+      where: { wecomUnionid: unionid },
+    });
+    if (!customer || customer.isDeleted) {
+      // unionid 未同步到企微客户（可能是企微后台未绑定微信开发者ID，或客户未同步）
+      return { ok: true, matched: false, message: '未识别到学员身份，请使用手机号后四位验证' };
+    }
+    const course = await this.prisma.course.findFirst({
+      where: { feiceLiveRoomId: params.feiceLiveRoomId },
+    });
+    if (!course) throw new NotFoundException('课程不存在');
+    const result = await this.issueLoginToken({
+      course,
+      customer,
+      loginMethod: 'wechat',
+      userAgent: params.userAgent,
+      clientIp: params.clientIp,
+    });
+    return { ...result, matched: true };
+  }
+
+  /** 兜底登录：手机号后四位匹配（优先本课程学员名单，其次全库） */
+  async loginByMobileSuffix(params: {
+    suffix: string;
+    feiceLiveRoomId: string;
+    userAgent?: string;
+    clientIp?: string;
+  }) {
+    if (!/^\d{4}$/.test(params.suffix)) {
+      throw new BadRequestException('请输入手机号后四位');
+    }
+    const course = await this.prisma.course.findFirst({
+      where: { feiceLiveRoomId: params.feiceLiveRoomId },
+    });
+    if (!course) throw new NotFoundException('课程不存在');
+    const match = (c: { remarkMobiles: string | null }) =>
+      (c.remarkMobiles ?? '').split(',').some((m) => m.endsWith(params.suffix));
+
+    // 1) 本课程学员名单内匹配
+    const rosterEntries = await this.prisma.courseRoster.findMany({
+      where: { task: { courseId: course.id } },
+      include: { customer: true },
+    });
+    let candidates = rosterEntries.map((r) => r.customer).filter(match);
+    // 2) 名单没唯一命中，退回全库匹配
+    if (candidates.length !== 1) {
+      const all = await this.prisma.customer.findMany({
+        where: { remarkMobiles: { contains: params.suffix } },
+      });
+      const global = all.filter(match);
+      if (global.length >= 1) candidates = global;
+    }
+    if (candidates.length === 0) {
+      return { ok: true, matched: false, message: '未匹配到学员，请确认手机号或联系销售老师' };
+    }
+    if (candidates.length > 1) {
+      return { ok: true, matched: false, message: '该后四位对应多位学员，请联系销售老师确认' };
+    }
+    const result = await this.issueLoginToken({
+      course,
+      customer: candidates[0],
+      loginMethod: 'mobile_last4',
+      userAgent: params.userAgent,
+      clientIp: params.clientIp,
+    });
+    return { ...result, matched: true };
+  }
+
+  /** 颁发登录态：记录 visit + Redis token（24h），sms/wechat/mobile_last4 共用 */
+  private async issueLoginToken(opts: {
+    course: { id: number };
+    customer: any;
+    loginMethod: string;
+    userAgent?: string;
+    clientIp?: string;
+    messageRecipientId?: number;
+  }) {
     const visitToken = uuidv4();
     const loginSuccessAt = new Date();
     await this.prisma.transferPageVisit.create({
       data: {
-        courseId: course.id,
-        customerId: customer.id,
+        courseId: opts.course.id,
+        customerId: opts.customer.id,
         visitToken,
-        userAgent: params.userAgent,
-        clientIp: params.clientIp,
-        loginMethod: params.method,
+        userAgent: opts.userAgent,
+        clientIp: opts.clientIp,
+        loginMethod: opts.loginMethod,
         loginSuccessAt,
-        messageRecipientId: params.messageRecipientId,
+        messageRecipientId: opts.messageRecipientId,
       },
     });
     // 如果是来自提醒消息 recipient，更新转化
-    if (params.messageRecipientId) {
+    if (opts.messageRecipientId) {
       await this.prisma.wecomGroupMessageRecipient.update({
-        where: { id: params.messageRecipientId },
+        where: { id: opts.messageRecipientId },
         data: { openedTransferPage: true, firstOpenedAt: loginSuccessAt },
       });
     }
-    // 颁发轻量登录 token（存 Redis 24h，对应 visitToken 作为 key）
     await this.redis.safeSet(
       `transfer:auth:${visitToken}`,
-      JSON.stringify({ customerId: customer.id, studentId: customer.studentId }),
+      JSON.stringify({ customerId: opts.customer.id, studentId: opts.customer.studentId }),
       24 * 3600,
     );
     return {
       ok: true,
       visitToken,
       customer: {
-        nickname: customer.nickname,
-        avatar: customer.avatar,
-        studentId: customer.studentId,
+        nickname: opts.customer.nickname,
+        avatar: opts.customer.avatar,
+        studentId: opts.customer.studentId,
       },
     };
   }
@@ -207,11 +335,17 @@ export class TransferService {
     if (!customer.thirdPartyTraceId) {
       throw new BadRequestException('该学生缺少追踪ID，请联系管理员');
     }
+    // 飞策邀课链接接口要求 userId/mobile 至少一个：优先取学员匹配到的飞策 uid
+    const identity = await this.prisma.feiceIdentity.findFirst({
+      where: { customerId: customer.id, uid: { not: null } },
+      orderBy: { matchLevel: 'desc' },
+    });
+    const firstMobile = (customer.remarkMobiles ?? '').split(',').find(Boolean);
     const feiceUrl = await this.feice.buildEntryUrl({
       liveRoomId: course.feiceLiveRoomId,
       thirdPartyTraceId: customer.thirdPartyTraceId,
-      nickname: customer.nickname,
-      entryType: course.status === 'ENDED' ? 'replay' : 'live',
+      userId: identity?.uid ?? undefined,
+      mobile: identity?.uid ? undefined : firstMobile,
     });
     // 更新 visit
     const now = new Date();

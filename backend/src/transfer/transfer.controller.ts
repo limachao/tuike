@@ -29,6 +29,40 @@ export class TransferController {
     return this.transfer.sendSmsCode(body.mobile);
   }
 
+  /** 微信服务号 OAuth 跳转地址（未配置返回 configured:false） */
+  @Get('wechat-auth-url')
+  getWechatAuthUrl(@Query('roomId') roomId: string) {
+    return this.transfer.getWechatAuthUrl(roomId);
+  }
+
+  /** 微信授权回调登录：code → unionid → 匹配客户 */
+  @Post('wechat-login')
+  wechatLogin(
+    @Body() body: { code: string; roomId: string },
+    @Req() req: any,
+  ) {
+    return this.transfer.wechatLogin({
+      code: body.code,
+      feiceLiveRoomId: body.roomId,
+      userAgent: req?.headers?.['user-agent'],
+      clientIp: req?.ip,
+    });
+  }
+
+  /** 兜底登录：手机号后四位 */
+  @Post('login-suffix')
+  loginSuffix(
+    @Body() body: { suffix: string; roomId: string },
+    @Req() req: any,
+  ) {
+    return this.transfer.loginByMobileSuffix({
+      suffix: body.suffix,
+      feiceLiveRoomId: body.roomId,
+      userAgent: req?.headers?.['user-agent'],
+      clientIp: req?.ip,
+    });
+  }
+
   @Post('login')
   login(
     @Body()

@@ -133,6 +133,8 @@ export class WecomSyncService {
     const gender = contact.gender ?? 0;
     const tags = JSON.stringify(contact.external_profile?.external_attr ?? []);
     const remarkMobiles = followInfo?.remark_mobiles?.join(',') ?? null;
+    // unionid：企微后台绑定微信开发者ID后 externalcontact/get 才会返回
+    const wecomUnionid = contact.unionid ?? null;
     // 脱敏存储手机号（SHA256 便于匹配飞策 mobile，不可逆）
     const mobileEncrypted = remarkMobiles
       ? crypto.createHash('sha256').update(remarkMobiles.split(',')[0]).digest('hex')
@@ -173,6 +175,7 @@ export class WecomSyncService {
           gender,
           remarkMobiles,
           mobileEncrypted: mobileEncrypted ?? customer.mobileEncrypted,
+          wecomUnionid: wecomUnionid ?? undefined,
           tags,
           lastSyncedAt: new Date(),
         },

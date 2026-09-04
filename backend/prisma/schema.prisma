@@ -74,6 +74,8 @@ model Customer {
   // 内部学生身份
   studentId           String    @unique @map("student_id") @db.VarChar(50) // 系统生成
   thirdPartyTraceId   String?   @unique @map("third_party_trace_id") @db.VarChar(100)
+  // 微信 unionid（服务号 OAuth ↔ 企微客户 打通）
+  wecomUnionid        String?   @unique @map("wecom_unionid") @db.VarChar(64)
   // 状态
   isDeleted           Boolean   @default(false) // 客户删除销售/冻结
   unfollowReason      String?   @db.VarChar(200)
