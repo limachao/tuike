@@ -176,12 +176,17 @@ export class FeiceSyncService {
 
   // ========= 内部方法 =========
   private async upsertCourse(item: any) {
-    const feiceLiveRoomId = String(item.live_room_id ?? item.id ?? item.liveRoomId);
+    const feiceLiveRoomId = String(item.live_room_id ?? item.liveRoomId ?? item.id ?? '');
     if (!feiceLiveRoomId) return;
-    const name = item.name ?? item.title ?? '未命名课程';
-    const startTime = item.start_time ? new Date(item.start_time) : null;
-    const endTime = item.end_time ? new Date(item.end_time) : null;
-    const totalDuration = Number(item.duration ?? 0); // 秒或分钟，由后续修正
+    // 飞策实测字段：liveName / startTime("2026-08-07 19:00:00") / endTime / liveStatus
+    const name = String(item.liveName ?? item.name ?? item.title ?? '未命名课程').trim() || '未命名课程';
+    const startTime = this.parseFeiceTime(item.startTime ?? item.start_time ?? item.liveStartTime);
+    const endTime = this.parseFeiceTime(item.endTime ?? item.end_time ?? item.liveEndTime);
+    // 时长：优先用接口字段，否则用 end-start 推算（单位：秒）
+    let totalDuration = Number(item.duration ?? item.liveDuration ?? 0);
+    if ((!totalDuration || totalDuration <= 0) && startTime && endTime) {
+      totalDuration = Math.max(0, Math.round((endTime.getTime() - startTime.getTime()) / 1000));
+    }
     let status: CourseStatus = CourseStatus.NOT_STARTED;
     const now = new Date();
     if (startTime && endTime) {
@@ -189,24 +194,38 @@ export class FeiceSyncService {
       else if (now > endTime) status = CourseStatus.ENDED;
       else status = CourseStatus.LIVE;
     }
+    // liveStatus: 2=已结束（实测）；其余情况以时间推断为准
+    if (Number(item.liveStatus) === 2) status = CourseStatus.ENDED;
     const data: any = {
       name,
-      coverUrl: item.cover_url ?? item.cover,
-      description: item.description ?? item.desc,
+      coverUrl: item.coverUrl ?? item.cover_url ?? item.cover ?? null,
+      description: item.description ?? item.desc ?? null,
       startTime,
       endTime,
       totalDuration,
       status,
-      isReplayReady: item.replay_ready ?? item.hasReplay ?? false,
-      liveEntryUrl: item.live_entry_url ?? item.liveUrl,
-      replayEntryUrl: item.replay_entry_url ?? item.replayUrl,
+      isReplayReady: status === CourseStatus.ENDED || item.replayReady === true || item.hasReplay === true,
+      liveEntryUrl: item.liveEntryUrl ?? item.live_entry_url ?? item.liveUrl ?? null,
+      replayEntryUrl: item.replayEntryUrl ?? item.replay_entry_url ?? item.replayUrl ?? null,
       lastSyncedAt: new Date(),
     };
     await this.prisma.course.upsert({
       where: { feiceLiveRoomId },
-      create: { feiceLiveRoomId, feiceLiveId: item.live_id ?? undefined, ...data },
+      create: { feiceLiveRoomId, feiceLiveId: item.liveId ?? item.live_id ?? undefined, ...data },
       update: data,
     });
+  }
+
+  /** 解析飞策时间字符串 "2026-08-07 19:00:00"（北京时间）为 Date */
+  private parseFeiceTime(v: any): Date | null {
+    if (!v) return null;
+    if (typeof v === 'number') return new Date(v); // 毫秒时间戳
+    const s = String(v).trim();
+    if (/^\d+$/.test(s)) return new Date(Number(s));
+    // "2026-08-07 19:00:00" → ISO，按服务器本地时区（Asia/Shanghai）解析
+    const iso = s.replace(' ', 'T');
+    const d = new Date(iso);
+    return isNaN(d.getTime()) ? null : d;
   }
 
   private async upsertLiveRecord(courseId: number, item: any): Promise<boolean> {
