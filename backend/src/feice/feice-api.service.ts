@@ -110,24 +110,23 @@ export class FeiceApiService implements OnModuleInit {
    * 课程/直播间列表
    * 必填：startTime（毫秒时间戳）, offset（偏移量，每次+20）
    * ⚠️ 飞策限制 startTime 不能超过 29 天前，也不能是未来时间
+   * 默认查最近 29 天（含已结束可看回放的课）；data 可能直接是数组
    */
   async listLiveRooms(params: { startTime?: number; offset?: number } = {}) {
     if (this.isMock()) return { list: [], total: 0 };
 
     const path = '/live-manage/open/live-room/list';
-    // 飞策限制：startTime 不能 > 29 天前，也不能是未来时间
-    // 用「现在 - 1 毫秒」最安全，查未来 + 正在进行的直播
     const now = Date.now();
     const maxPast = now - 29 * 24 * 3600 * 1000;
-    const userStart = params.startTime ?? (now - 1);
-    const startTime = String(Math.max(userStart, maxPast));
+    const userStart = params.startTime ?? maxPast;
+    // 夹在 [29天前, 当前] 区间，避免未来时间报错
+    const startTime = String(Math.min(Math.max(userStart, maxPast), now));
     const offset = String(params.offset ?? 0);
 
     const r = await this.signedRequest<any>('GET', path, { startTime, offset });
-    return {
-      list: r.data?.list ?? r.data?.records ?? r.list ?? [],
-      total: r.data?.total ?? r.data?.count ?? 0,
-    };
+    const list = Array.isArray(r.data) ? r.data : r.data?.list ?? r.data?.records ?? r.list ?? [];
+    const total = Array.isArray(r.data) ? r.data.length : r.data?.total ?? r.data?.count ?? 0;
+    return { list, total };
   }
 
   /** 邀课记录列表 */
@@ -141,18 +140,16 @@ export class FeiceApiService implements OnModuleInit {
     const path = '/live-manage/open/invitation-record/list';
     const now = Date.now();
     const maxPast = now - 29 * 24 * 3600 * 1000;
-    const userStart = params.startTime ?? (now - 1);
+    const userStart = params.startTime ?? maxPast;
     const extra: Record<string, string> = {
       offset: String(params.offset ?? 0),
-      startTime: String(Math.max(userStart, maxPast)),
+      startTime: String(Math.min(Math.max(userStart, maxPast), now)),
     };
     if (params.liveRoomId) extra.liveRoomId = params.liveRoomId;
 
     const r = await this.signedRequest<any>('GET', path, extra);
-    return {
-      list: r.data?.list ?? r.list ?? [],
-      total: r.data?.total ?? 0,
-    };
+    const list = Array.isArray(r.data) ? r.data : r.data?.list ?? r.list ?? [];
+    return { list, total: Array.isArray(r.data) ? r.data.length : r.data?.total ?? 0 };
   }
 
   /** 直播观看记录 GET /live-manage/open/class-record/list */
@@ -167,19 +164,17 @@ export class FeiceApiService implements OnModuleInit {
     const path = '/live-manage/open/class-record/list';
     const now = Date.now();
     const maxPast = now - 29 * 24 * 3600 * 1000;
-    const userStart = params.startTime ?? (now - 1);
+    const userStart = params.startTime ?? maxPast;
     const extra: Record<string, string> = {
       offset: String(params.offset ?? 0),
-      startTime: String(Math.max(userStart, maxPast)),
+      startTime: String(Math.min(Math.max(userStart, maxPast), now)),
     };
     if (params.liveRoomId) extra.liveRoomId = params.liveRoomId;
     if (params.liveId) extra.liveId = params.liveId;
 
     const r = await this.signedRequest<any>('GET', path, extra);
-    return {
-      list: r.data?.list ?? r.data?.records ?? r.list ?? [],
-      total: r.data?.total ?? 0,
-    };
+    const list = Array.isArray(r.data) ? r.data : r.data?.list ?? r.data?.records ?? r.list ?? [];
+    return { list, total: Array.isArray(r.data) ? r.data.length : r.data?.total ?? 0 };
   }
 
   /** 回放观看记录 GET /live-manage/open/live-playback-record/list */
@@ -193,18 +188,16 @@ export class FeiceApiService implements OnModuleInit {
     const path = '/live-manage/open/live-playback-record/list';
     const now = Date.now();
     const maxPast = now - 29 * 24 * 3600 * 1000;
-    const userStart = params.startTime ?? (now - 1);
+    const userStart = params.startTime ?? maxPast;
     const extra: Record<string, string> = {
       offset: String(params.offset ?? 0),
-      startTime: String(Math.max(userStart, maxPast)),
+      startTime: String(Math.min(Math.max(userStart, maxPast), now)),
     };
     if (params.liveRoomId) extra.liveRoomId = params.liveRoomId;
 
     const r = await this.signedRequest<any>('GET', path, extra);
-    return {
-      list: r.data?.list ?? r.data?.records ?? r.list ?? [],
-      total: r.data?.total ?? 0,
-    };
+    const list = Array.isArray(r.data) ? r.data : r.data?.list ?? r.data?.records ?? r.list ?? [];
+    return { list, total: Array.isArray(r.data) ? r.data.length : r.data?.total ?? 0 };
   }
 
   /**
