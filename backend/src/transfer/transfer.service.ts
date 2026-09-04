@@ -197,7 +197,7 @@ export class TransferService {
       throw new BadRequestException('微信授权暂未开放，请使用手机号后四位验证');
     }
     const url = `https://api.weixin.qq.com/sns/oauth2/access_token?appid=${appId}&secret=${secret}&code=${encodeURIComponent(params.code)}&grant_type=authorization_code`;
-    const res = await fetch(url);
+    const res = await fetch(url, { signal: AbortSignal.timeout(10000) });
     const data: any = await res.json().catch(() => ({}));
     if (data.errcode) {
       this.logger.warn(

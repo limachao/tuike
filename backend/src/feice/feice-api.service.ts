@@ -261,13 +261,24 @@ export class FeiceApiService implements OnModuleInit {
     this.logger.log(`[Feice] ${method} ${path}?appId=***&ts=${authQuery.ts}`);
 
     try {
-      const res = await fetch(url, {
-        method,
-        headers: body ? { 'Content-Type': 'application/json' } : undefined,
-        body: body ? JSON.stringify(body) : undefined,
-      });
+      // 15 秒超时：避免飞策无响应时请求永久挂起（undici 默认超时长达 5 分钟）
+      let res: Response;
+      try {
+        res = await fetch(url, {
+          method,
+          headers: body ? { 'Content-Type': 'application/json' } : undefined,
+          body: body ? JSON.stringify(body) : undefined,
+          signal: AbortSignal.timeout(15000),
+        });
+      } catch (e: any) {
+        if (e?.name === 'TimeoutError' || e?.name === 'AbortError') {
+          throw new Error('飞策接口请求超时（15秒无响应），请稍后重试');
+        }
+        throw e;
+      }
 
       const text = await res.text().catch(() => '');
+      this.logger.log(`[Feice] ${path} 响应 HTTP ${res.status}: ${text.slice(0, 200)}`);
       let data: any;
       try {
         data = JSON.parse(text);
