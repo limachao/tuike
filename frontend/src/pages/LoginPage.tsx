@@ -6,8 +6,8 @@ import { useAuth } from '@/store/auth';
 export default function LoginPage() {
   const setAuth = useAuth((s) => s.setAuth);
   const navigate = useNavigate();
-  const [phone, setPhone] = useState('13800000000');
-  const [pwd, setPwd] = useState('Admin@123456');
+  const [phone, setPhone] = useState('');
+  const [pwd, setPwd] = useState('');
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -101,12 +101,6 @@ export default function LoginPage() {
           <button type="submit" disabled={loading} className="btn-primary w-full py-3">
             {loading ? '登录中…' : '登 录'}
           </button>
-
-          <div className="text-[11px] text-text-tertiary text-center leading-relaxed">
-            默认主管账号：13800000000 / Admin@123456
-            <br />
-            请在首次登录后及时修改密码
-          </div>
         </form>
       </div>
     </div>
