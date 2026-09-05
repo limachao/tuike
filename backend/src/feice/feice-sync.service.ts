@@ -188,6 +188,11 @@ export class FeiceSyncService {
   private async postSyncRefresh(courseId?: number) {
     try {
       await this.identity.runFullMatch();
+      try {
+        await this.recomputeListenStats();
+      } catch (e) {
+        this.logger.warn(`客户听课汇总重算失败: ${(e as Error).message}`);
+      }
       const tasks = await this.prisma.courseMonitoringTask.findMany({
         where: { isActive: true, ...(courseId ? { courseId } : {}) },
         select: { id: true },
@@ -203,6 +208,46 @@ export class FeiceSyncService {
     } catch (e) {
       this.logger.warn(`同步后身份关联失败: ${(e as Error).message}`);
     }
+  }
+
+  /** 重算客户听课时长汇总表（客户信息/快捷群发页直查，避免每次现聚合全表） */
+  async recomputeListenStats() {
+    await this.prisma.$executeRaw`
+      WITH live_agg AS (
+        SELECT COALESCE(r."customerId", fi."customerId") AS cid,
+               SUM(r."effectiveDurationSec") AS sec
+        FROM live_watch_records r
+        LEFT JOIN feice_identities fi ON fi.id = r."feiceIdentityId"
+        WHERE r."userType" = 'student'
+          AND COALESCE(r."customerId", fi."customerId") IS NOT NULL
+        GROUP BY 1
+      ),
+      replay_agg AS (
+        SELECT COALESCE(r."customerId", fi."customerId") AS cid,
+               SUM(r."effectiveDurationSec") AS sec
+        FROM replay_watch_records r
+        LEFT JOIN feice_identities fi ON fi.id = r."feiceIdentityId"
+        WHERE COALESCE(r."customerId", fi."customerId") IS NOT NULL
+        GROUP BY 1
+      )
+      INSERT INTO customer_listen_stats ("customerId", "liveSec", "replaySec", "updatedAt")
+      SELECT c.id, COALESCE(l.sec, 0)::int, COALESCE(p.sec, 0)::int, now()
+      FROM customers c
+      LEFT JOIN live_agg l ON l.cid = c.id
+      LEFT JOIN replay_agg p ON p.cid = c.id
+      WHERE COALESCE(l.sec, 0) + COALESCE(p.sec, 0) > 0
+      ON CONFLICT ("customerId") DO UPDATE
+        SET "liveSec" = EXCLUDED."liveSec",
+            "replaySec" = EXCLUDED."replaySec",
+            "updatedAt" = now()
+    `;
+  }
+
+  /** 后端启动时兜底重算一次（部署后首次访问即为汇总数据） */
+  async onModuleInit() {
+    this.recomputeListenStats()
+      .then(() => this.logger.log('[Feice] 启动时客户听课汇总重算完成'))
+      .catch((e) => this.logger.warn(`启动时汇总重算失败: ${(e as Error).message}`));
   }
 
   // ========= 内部方法 =========

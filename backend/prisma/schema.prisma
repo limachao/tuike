@@ -574,3 +574,15 @@ model GeneratedLink {
   @@index([createdBy, createdAt])
   @@map("generated_links")
 }
+
+// ================================
+// 11. 客户听课时长汇总（快捷群发/客户信息页直查）
+// ================================
+
+model CustomerListenStat {
+  customerId Int      @id
+  liveSec    Int      @default(0)
+  replaySec  Int      @default(0)
+  updatedAt  DateTime @updatedAt
+  @@map("customer_listen_stats")
+}

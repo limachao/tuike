@@ -354,56 +354,26 @@ export class ReminderService {
     addFrom?: string; // YYYY-MM-DD，北京时间
     addTo?: string;
   }) {
-    const kw = params.keyword?.trim() || null;
-    const from = params.addFrom ? new Date(`${params.addFrom}T00:00:00+08:00`) : null;
-    const to = params.addTo ? new Date(`${params.addTo}T23:59:59+08:00`) : null;
-
+    // 关键词/日期过滤已移到前端本地执行（数据一次性下发），服务端只做归属查询
     const rows: any[] = await this.prisma.$queryRaw`
-      WITH live_agg AS (
-        SELECT COALESCE(r."customerId", fi."customerId") AS cid,
-               SUM(r."effectiveDurationSec") AS sec
-        FROM live_watch_records r
-        LEFT JOIN feice_identities fi ON fi.id = r."feiceIdentityId"
-        WHERE r."userType" = 'student'
-          AND COALESCE(r."customerId", fi."customerId") IS NOT NULL
-        GROUP BY 1
-      ),
-      replay_agg AS (
-        SELECT COALESCE(r."customerId", fi."customerId") AS cid,
-               SUM(r."effectiveDurationSec") AS sec
-        FROM replay_watch_records r
-        LEFT JOIN feice_identities fi ON fi.id = r."feiceIdentityId"
-        WHERE COALESCE(r."customerId", fi."customerId") IS NOT NULL
-        GROUP BY 1
-      )
       SELECT c.id,
              c.nickname,
-             c.external_userid,
              c."remarkMobiles" AS remark_mobiles,
              r."addTime" AS add_time,
-             (COALESCE(l.sec, 0) + COALESCE(p.sec, 0))::int AS listen_sec
+             (COALESCE(s."liveSec", 0) + COALESCE(s."replaySec", 0))::int AS listen_sec
       FROM customers c
       JOIN customer_sales_relations r
         ON r."customerId" = c.id
        AND r."salesUserId" = ${params.operatorId}
        AND r.status = 'active'
-      LEFT JOIN live_agg l ON l.cid = c.id
-      LEFT JOIN replay_agg p ON p.cid = c.id
+      LEFT JOIN customer_listen_stats s ON s."customerId" = c.id
       WHERE c."isDeleted" = false
-        AND (${kw}::text IS NULL
-             OR c.nickname ILIKE '%' || ${kw} || '%'
-             OR c."remarkMobiles" ILIKE '%' || ${kw} || '%'
-             OR c.external_userid ILIKE '%' || ${kw} || '%')
-        AND (${from}::timestamptz IS NULL OR r."addTime" >= ${from}::timestamptz)
-        AND (${to}::timestamptz IS NULL OR r."addTime" <= ${to}::timestamptz)
       ORDER BY r."addTime" DESC NULLS LAST
-      LIMIT 20000
     `;
 
     return rows.map((r) => ({
       id: Number(r.id),
       nickname: r.nickname,
-      externalUserid: r.external_userid,
       remarkMobiles: r.remark_mobiles,
       addTime: r.add_time,
       listenSec: Number(r.listen_sec ?? 0),

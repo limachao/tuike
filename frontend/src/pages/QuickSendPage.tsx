@@ -17,16 +17,12 @@ export default function QuickSendPage() {
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [sending, setSending] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  /** 分批渲染：先画 200 行，滚动到底部每次追加 300 行 */
+  const [visibleCount, setVisibleCount] = useState(200);
 
   const loadCustomers = async () => {
     try {
-      const { data } = await api.get('/reminder/quick-send/customers', {
-        params: {
-          keyword: keyword || undefined,
-          addFrom: addFrom || undefined,
-          addTo: addTo || undefined,
-        },
-      });
+      const { data } = await api.get('/reminder/quick-send/customers');
       setCustomers(Array.isArray(data) ? data : []);
     } catch (e) {
       console.error(e);
@@ -36,7 +32,7 @@ export default function QuickSendPage() {
     }
   };
 
-  useEffect(() => { loadCustomers(); }, [keyword, addFrom, addTo]);
+  useEffect(() => { loadCustomers(); }, []);
 
   // 链接来源：manual=手动填 / live=正在直播 / replay=我生成过的回放链接
   const [linkSource, setLinkSource] = useState<'manual' | 'live' | 'replay'>('manual');
@@ -51,6 +47,27 @@ export default function QuickSendPage() {
   }, []);
 
   const liveCourses = useMemo(() => courses.filter((c) => c.status === 'LIVE'), [courses]);
+
+  /** 本地筛选：昵称/手机号关键词 + 加入企微日期区间（数据已一次性拉到本地） */
+  const filteredCustomers = useMemo(() => {
+    const kw = keyword.trim().toLowerCase();
+    const from = addFrom ? dayjs(addFrom).startOf('day').valueOf() : null;
+    const to = addTo ? dayjs(addTo).endOf('day').valueOf() : null;
+    return customers.filter((c) => {
+      if (kw) {
+        const nick = String(c.nickname ?? '').toLowerCase();
+        const mobile = String(c.remarkMobiles ?? '');
+        if (!nick.includes(kw) && !mobile.includes(kw)) return false;
+      }
+      if (from || to) {
+        if (!c.addTime) return false;
+        const t = dayjs(c.addTime).valueOf();
+        if (from && t < from) return false;
+        if (to && t > to) return false;
+      }
+      return true;
+    });
+  }, [customers, keyword, addFrom, addTo]);
 
   /** 选中直播课程 → 填入追踪链接 + 默认文案 */
   const fillLive = (id: number | '') => {
@@ -85,8 +102,8 @@ export default function QuickSendPage() {
   };
 
   const toggleAll = () => {
-    if (selected.size === customers.length && customers.length > 0) setSelected(new Set());
-    else setSelected(new Set(customers.map((c) => c.id)));
+    if (selected.size === filteredCustomers.length && filteredCustomers.length > 0) setSelected(new Set());
+    else setSelected(new Set(filteredCustomers.map((c) => c.id)));
   };
 
   /** 一键移除已选中、且累计听课时长 > 阈值 的客户 */
@@ -267,11 +284,19 @@ export default function QuickSendPage() {
                 {overThresholdSelected > 0 && <span className="ml-1 chip !py-0 !text-[10px] !text-accent-amber">{overThresholdSelected}</span>}
               </button>
               <button onClick={toggleAll} className="btn-ghost !py-2 text-xs whitespace-nowrap">
-                {selected.size === customers.length && customers.length > 0 ? '取消全选' : '全选'}
+                {selected.size === filteredCustomers.length && filteredCustomers.length > 0 ? '取消全选' : '全选'}
               </button>
             </div>
 
-            <div className="overflow-x-auto scroll-thin -mx-2 px-2 max-h-[480px] overflow-y-auto">
+            <div
+              className="overflow-x-auto scroll-thin -mx-2 px-2 max-h-[480px] overflow-y-auto"
+              onScroll={(e) => {
+                const el = e.currentTarget;
+                if (el.scrollTop + el.clientHeight >= el.scrollHeight - 120) {
+                  setVisibleCount((v) => (v < filteredCustomers.length ? v + 300 : v));
+                }
+              }}
+            >
               <table className="w-full text-sm">
                 <thead className="sticky top-0 bg-[#1c1c28]/95 backdrop-blur z-10">
                   <tr className="text-left text-xs text-text-tertiary">
@@ -283,11 +308,11 @@ export default function QuickSendPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {customers.length === 0 ? (
+                  {filteredCustomers.length === 0 ? (
                     <tr><td colSpan={5} className="text-center py-12 text-text-tertiary">
                       {loaded ? '暂无客户，试试调整搜索或日期筛选' : '加载中…'}
                     </td></tr>
-                  ) : customers.map((c) => (
+                  ) : filteredCustomers.slice(0, visibleCount).map((c) => (
                     <tr key={c.id} className="border-t border-glass-border hover:bg-white/[0.02]">
                       <td className="py-2 pr-3">
                         <input
@@ -320,7 +345,8 @@ export default function QuickSendPage() {
               </table>
             </div>
             <div className="text-xs text-text-tertiary pt-1">
-              共 {customers.length} 人 · 已选 {selected.size} 人
+              共 {filteredCustomers.length} 人 · 已选 {selected.size} 人
+              {filteredCustomers.length > visibleCount && <span className="ml-2">（滚动加载更多）</span>}
               <span className="ml-3 text-[11px]">听课时长来自飞策直播+回放记录（未匹配身份的学员暂计 0，微信认证后自动补全）</span>
             </div>
           </div>

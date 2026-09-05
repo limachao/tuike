@@ -10,12 +10,12 @@ export default function CustomersPage() {
   const [listenFilter, setListenFilter] = useState<ListenFilter>('all');
   const [syncing, setSyncing] = useState(false);
   const [loaded, setLoaded] = useState(false);
+  /** 分批渲染：先画 200 行，滚动到底部每次追加 300 行 */
+  const [visibleCount, setVisibleCount] = useState(200);
 
   const load = async () => {
     try {
-      const { data } = await api.get('/reminder/quick-send/customers', {
-        params: { keyword: keyword || undefined },
-      });
+      const { data } = await api.get('/reminder/quick-send/customers');
       setCustomers(Array.isArray(data) ? data : []);
     } catch (e) {
       console.error(e);
@@ -25,7 +25,7 @@ export default function CustomersPage() {
     }
   };
 
-  useEffect(() => { load(); }, [keyword]);
+  useEffect(() => { load(); }, []);
 
   const syncCustomers = async () => {
     setSyncing(true);
@@ -41,11 +41,20 @@ export default function CustomersPage() {
 
   const listened = useMemo(() => customers.filter((c) => (c.listenSec ?? 0) > 0), [customers]);
 
+  /** 本地筛选：关键词（昵称/手机号）+ 听课状态（数据已一次性拉到本地） */
   const filtered = useMemo(() => {
-    if (listenFilter === 'listened') return customers.filter((c) => (c.listenSec ?? 0) > 0);
-    if (listenFilter === 'not_listened') return customers.filter((c) => (c.listenSec ?? 0) <= 0);
-    return customers;
-  }, [customers, listenFilter]);
+    const kw = keyword.trim().toLowerCase();
+    return customers.filter((c) => {
+      if (listenFilter === 'listened' && (c.listenSec ?? 0) <= 0) return false;
+      if (listenFilter === 'not_listened' && (c.listenSec ?? 0) > 0) return false;
+      if (kw) {
+        const nick = String(c.nickname ?? '').toLowerCase();
+        const mobile = String(c.remarkMobiles ?? '');
+        if (!nick.includes(kw) && !mobile.includes(kw)) return false;
+      }
+      return true;
+    });
+  }, [customers, keyword, listenFilter]);
 
   const listenCell = (sec: number) => {
     if (!sec || sec <= 0) return <span className="text-text-tertiary">未听课</span>;
@@ -110,7 +119,15 @@ export default function CustomersPage() {
           </div>
         </div>
 
-        <div className="overflow-x-auto scroll-thin -mx-2 px-2 max-h-[560px] overflow-y-auto">
+        <div
+          className="overflow-x-auto scroll-thin -mx-2 px-2 max-h-[560px] overflow-y-auto"
+          onScroll={(e) => {
+            const el = e.currentTarget;
+            if (el.scrollTop + el.clientHeight >= el.scrollHeight - 120) {
+              setVisibleCount((v) => (v < filtered.length ? v + 300 : v));
+            }
+          }}
+        >
           <table className="w-full text-sm">
             <thead className="sticky top-0 bg-[#1c1c28]/95 backdrop-blur z-10">
               <tr className="text-left text-xs text-text-tertiary">
@@ -125,7 +142,7 @@ export default function CustomersPage() {
                 <tr><td colSpan={4} className="text-center py-12 text-text-tertiary">
                   {loaded ? '暂无客户，点右上「获取我的客户信息」从企业微信同步' : '加载中…'}
                 </td></tr>
-              ) : filtered.map((c) => (
+              ) : filtered.slice(0, visibleCount).map((c) => (
                 <tr key={c.id} className="border-t border-glass-border hover:bg-white/[0.02]">
                   <td className="py-2 pr-4">
                     <div className="flex items-center gap-2">
@@ -147,6 +164,7 @@ export default function CustomersPage() {
         </div>
         <div className="text-xs text-text-tertiary pt-1">
           共 {filtered.length} 人
+          {filtered.length > visibleCount && <span className="ml-2">（滚动加载更多）</span>}
           <span className="ml-3 text-[11px]">听课时长来自飞策直播+回放记录（未匹配身份的学员显示未听课，微信认证后自动补全）</span>
         </div>
       </div>
