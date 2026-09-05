@@ -8,6 +8,8 @@ const LISTEN_THRESHOLD_MIN = 100;
 
 export default function QuickSendPage() {
   const nav = useNavigate();
+  const [courses, setCourses] = useState<any[]>([]);
+  const [courseId, setCourseId] = useState<number | ''>('');
   const [content, setContent] = useState('');
   const [url, setUrl] = useState('');
   const [customers, setCustomers] = useState<any[]>([]);
@@ -37,6 +39,24 @@ export default function QuickSendPage() {
   };
 
   useEffect(() => { loadCustomers(); }, [keyword, addFrom, addTo]);
+
+  // 预加载课程列表
+  useEffect(() => {
+    api.get('/feice/courses').then((r) => setCourses(Array.isArray(r.data) ? r.data : []));
+  }, []);
+
+  // 选课程 → 自动生成追踪链接 + 默认文案
+  const selCourse = courses.find((c) => c.id === courseId);
+  const pickCourse = (id: number | '') => {
+    setCourseId(id);
+    const c = courses.find((x) => x.id === id);
+    if (c) {
+      setUrl(`${window.location.origin}/course/${c.feiceLiveRoomId}`);
+      if (!content.trim()) {
+        setContent(`【${c.name}】上课啦！\n点击下方链接进入直播间听课：`);
+      }
+    }
+  };
 
   // 选中的人里，听课超过阈值会被一键移除
   const overThresholdSelected = useMemo(() => {
@@ -116,6 +136,26 @@ export default function QuickSendPage() {
         <div className="space-y-4">
           {/* 文案输入 */}
           <div className="glass-card p-5 space-y-4">
+            <div>
+              <label className="label">选择要推的课程（自动生成追踪链接）</label>
+              <select
+                className="input"
+                value={courseId}
+                onChange={(e) => pickCourse(e.target.value ? Number(e.target.value) : '')}
+              >
+                <option value="">— 不推课程，手动填链接 —</option>
+                {courses.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.name}（{dayjs(c.startTime).format('MM-DD HH:mm')}）
+                  </option>
+                ))}
+              </select>
+              {selCourse && (
+                <div className="text-[11px] text-text-tertiary mt-1">
+                  链接已自动生成：学员点开 → 登录 → 进入{selCourse.status === 'LIVE' ? '直播' : '回放'}，听课自动归因到该学员
+                </div>
+              )}
+            </div>
             <div>
               <label className="label">发送文案</label>
               <textarea
