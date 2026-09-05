@@ -261,8 +261,8 @@ export class FeiceSyncService {
   }
 
   private async upsertLiveRecord(courseId: number, item: any): Promise<boolean> {
-    const uid = String(item.uid ?? '');
-    const liveId = String(item.live_id ?? item.liveId ?? '');
+    const uid = this.blankToNull(item.uid) ?? '';
+    const liveId = this.blankToNull(item.live_id ?? item.liveId) ?? '';
     const enter = item.enter_class_time ?? item.enterClassTime;
     const enterStr = enter ? String(enter) : 'x';
     const hashSource = `${uid}|${liveId}|${enterStr}|${item.learningDuration ?? 0}`;
@@ -293,8 +293,8 @@ export class FeiceSyncService {
       await this.prisma.liveWatchRecord.create({
         data: {
           courseId,
-          uid,
-          liveId,
+          uid: uid || null,
+          liveId: liveId || null,
           userType,
           learningDuration,
           enterClassTime: enterClass,
@@ -318,8 +318,8 @@ export class FeiceSyncService {
   }
 
   private async upsertReplayRecord(courseId: number, item: any): Promise<boolean> {
-    const uid = String(item.uid ?? '');
-    const liveRoomId = String(item.live_room_id ?? item.liveRoomId ?? '');
+    const uid = this.blankToNull(item.uid) ?? '';
+    const liveRoomId = this.blankToNull(item.live_room_id ?? item.liveRoomId) ?? '';
     const enter = this.normalizeTime(item.enter_time ?? item.enterTime);
     const exit = this.normalizeTime(item.exit_time ?? item.exitTime);
     // 文档：locate = 本次学习观看最大进度（秒）
@@ -337,8 +337,8 @@ export class FeiceSyncService {
       await this.prisma.replayWatchRecord.create({
         data: {
           courseId,
-          uid,
-          liveRoomId,
+          uid: uid || null,
+          liveRoomId: liveRoomId || null,
           locate,
           enterTime: enter,
           exitTime: exit,
@@ -361,13 +361,15 @@ export class FeiceSyncService {
    * 并找到对应的 customer，建立身份关联。
    */
   private async handleInviteRecord(item: any) {
-    const thirdPartyTraceId = item.third_party_trace_id ?? item.thirdPartyTraceId;
-    const uid = item.uid ? String(item.uid) : null;
-    const thirdPartyStudentId = item.third_party_student_id
-      ? String(item.third_party_student_id)
-      : null;
-    const mobile = item.mobile ?? null;
-    const unionId = item.union_id ?? item.unionId ?? null;
+    const thirdPartyTraceId = this.blankToNull(
+      item.third_party_trace_id ?? item.thirdPartyTraceId,
+    );
+    const uid = this.blankToNull(item.uid);
+    const thirdPartyStudentId = this.blankToNull(
+      item.third_party_student_id ?? item.thirdPartyStudentId,
+    );
+    const mobile = this.blankToNull(item.mobile);
+    const unionId = this.blankToNull(item.union_id ?? item.unionId);
     if (!thirdPartyTraceId && !uid && !thirdPartyStudentId) return;
 
     // 找 customer
@@ -433,13 +435,15 @@ export class FeiceSyncService {
    * 所以不能只靠邀课记录建身份——观看记录本身也要建。
    */
   private async ensureIdentityFromRecord(item: any, source: string) {
-    const uid = item.uid ? String(item.uid) : null;
-    const unionId = item.union_id ?? item.unionId ?? null;
-    const mobile = item.mobile ?? null;
-    const sidRaw = item.third_party_student_id ?? item.thirdPartyStudentId;
-    const thirdPartyStudentId = sidRaw ? String(sidRaw) : null;
-    const tidRaw = item.third_party_trace_id ?? item.thirdPartyTraceId;
-    const thirdPartyTraceId = tidRaw ? String(tidRaw) : null;
+    const uid = this.blankToNull(item.uid);
+    const unionId = this.blankToNull(item.union_id ?? item.unionId);
+    const mobile = this.blankToNull(item.mobile);
+    const thirdPartyStudentId = this.blankToNull(
+      item.third_party_student_id ?? item.thirdPartyStudentId,
+    );
+    const thirdPartyTraceId = this.blankToNull(
+      item.third_party_trace_id ?? item.thirdPartyTraceId,
+    );
     if (!uid && !unionId && !mobile && !thirdPartyStudentId && !thirdPartyTraceId) return;
 
     const mobileHash = mobile
@@ -484,6 +488,17 @@ export class FeiceSyncService {
   }
 
   // ====== utils ======
+  /**
+   * 飞策缺失字段常返回空字符串 ""。?? 只认 null/undefined 不认 ""，
+   * 直接用 ?? 合并会把已有的 unionId/手机号等身份字段覆盖成空串，
+   * 统一在这里把空白值归一为 null。
+   */
+  private blankToNull(v: any): string | null {
+    if (v === null || v === undefined) return null;
+    const s = String(v).trim();
+    return s === '' ? null : s;
+  }
+
   private normalizeDurationSec(v: any): number {
     const n = Number(v ?? 0);
     if (n <= 0) return 0;

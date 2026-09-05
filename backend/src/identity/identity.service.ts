@@ -166,7 +166,7 @@ export class IdentityService {
   async linkReplayRecordsToCustomer() {
     const rows = await this.prisma.replayWatchRecord.findMany({
       where: { customerId: null },
-      take: 2000,
+      take: 20000,
     });
     let updated = 0;
     for (const r of rows) {
