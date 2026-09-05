@@ -147,11 +147,12 @@ export class WecomApiService implements OnModuleInit {
       text: { content: input.textContent },
     };
     if (input.linkUrl) {
+      const publicBase =
+        process.env.PUBLIC_BASE_URL ?? 'https://tuike.liangjieke.com';
       body.link = {
         title: input.linkTitle ?? '课程入口',
-        picurl:
-          input.linkPic ??
-          'https://trae-api-cn.mchost.guru/api/ide/v1/text_to_image?prompt=course%20entry%20button%20simple%20blue&image_size=square',
+        // 链接卡片封面：默认用品牌封面图（frontend/public/brand-cover.jpg）
+        picurl: input.linkPic ?? `${publicBase}/brand-cover.jpg`,
         desc: input.linkDesc ?? '点击进入课程学习',
         url: input.linkUrl,
       };
