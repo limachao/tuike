@@ -151,8 +151,9 @@ export class WecomApiService implements OnModuleInit {
         process.env.PUBLIC_BASE_URL ?? 'https://tuike.liangjieke.com';
       body.link = {
         title: input.linkTitle ?? '课程入口',
-        // 链接卡片封面：默认用品牌封面图（frontend/public/brand-cover.jpg）
-        picurl: input.linkPic ?? `${publicBase}/brand-cover.jpg`,
+        // 链接卡片封面：默认用品牌封面图（frontend/public/brand-cover-v2.jpg）
+        // 注：微信按 URL 缓存封面，换图必须换文件名
+        picurl: input.linkPic ?? `${publicBase}/brand-cover-v2.jpg`,
         desc: input.linkDesc ?? '点击进入课程学习',
         url: input.linkUrl,
       };
