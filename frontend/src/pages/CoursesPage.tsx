@@ -8,6 +8,7 @@ export default function CoursesPage() {
   const [list, setList] = useState<any[]>([]);
   const [kw, setKw] = useState('');
   const [playingId, setPlayingId] = useState<number | null>(null);
+  const [syncingId, setSyncingId] = useState<number | null>(null);
 
   const load = async () => {
     const { data } = await api.get('/feice/courses', { params: { keyword: kw || undefined } });
@@ -17,6 +18,23 @@ export default function CoursesPage() {
   const sync = async () => {
     await api.post('/feice/sync/courses');
     load();
+  };
+
+  /** 同步单门课的听课记录（直播+回放+邀课），后端会自动做身份匹配+听课重算 */
+  const syncRecords = async (c: any) => {
+    setSyncingId(c.id);
+    try {
+      await Promise.all([
+        api.post(`/feice/sync/course/${c.id}/live-records`),
+        api.post(`/feice/sync/course/${c.id}/replay-records`),
+        api.post('/feice/sync/invite-records', null, { params: { courseId: c.id } }),
+      ]);
+      alert(`「${c.name}」听课记录同步完成，可去监控任务查看数据`);
+    } catch (e: any) {
+      alert(e?.response?.data?.message ?? '同步失败，请稍后重试');
+    } finally {
+      setSyncingId(null);
+    }
   };
 
   useEffect(() => { load(); }, [kw]);
@@ -121,6 +139,13 @@ export default function CoursesPage() {
                     建立监控任务
                   </button>
                 </div>
+                <button
+                  onClick={() => syncRecords(c)}
+                  disabled={syncingId === c.id}
+                  className="btn-ghost w-full mt-2 text-xs"
+                >
+                  {syncingId === c.id ? '同步中…' : '↻ 同步听课记录'}
+                </button>
               </div>
             </div>
           ))}
