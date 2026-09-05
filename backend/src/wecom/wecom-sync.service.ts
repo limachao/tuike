@@ -164,9 +164,11 @@ export class WecomSyncService {
     const mobileEncrypted = remarkMobiles
       ? crypto.createHash('sha256').update(remarkMobiles.split(',')[0]).digest('hex')
       : null;
-    const addTime = followInfo?.add_time
-      ? new Date(Number(followInfo.add_time) * 1000)
-      : new Date();
+    // 添加时间：企微 follow_info 标准字段是 createtime（Unix 秒），
+    // 不存在 add_time 字段（历史 bug：取不到值时兜底 new Date()，导致所有
+    // 客户的加入时间都变成同步当天）。取不到时保持 null，不伪造数据。
+    const followTimeRaw = followInfo?.createtime ?? followInfo?.add_time;
+    const addTime = followTimeRaw ? new Date(Number(followTimeRaw) * 1000) : null;
 
     // upsert 客户
     let customer = await this.prisma.customer.findUnique({
