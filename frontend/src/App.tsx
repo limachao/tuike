@@ -5,6 +5,7 @@ import AppLayout from '@/layouts/AppLayout';
 import LoginPage from '@/pages/LoginPage';
 import DashboardPage from '@/pages/DashboardPage';
 import CoursesPage from '@/pages/CoursesPage';
+import CustomersPage from '@/pages/CustomersPage';
 import TaskCreatePage from '@/pages/TaskCreatePage';
 import TaskDetailPage from '@/pages/TaskDetailPage';
 import ReminderTasksPage from '@/pages/ReminderTasksPage';
@@ -46,6 +47,7 @@ function App() {
         <Route index element={<Navigate to="/dashboard" replace />} />
         <Route path="dashboard" element={<DashboardPage />} />
         <Route path="courses" element={<CoursesPage />} />
+        <Route path="customers" element={<CustomersPage />} />
         <Route path="tasks/new" element={<TaskCreatePage />} />
         <Route path="tasks/:taskId" element={<TaskDetailPage />} />
         <Route path="reminders" element={<ReminderTasksPage />} />
