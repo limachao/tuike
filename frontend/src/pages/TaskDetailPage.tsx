@@ -4,6 +4,7 @@ import api from '@/lib/api';
 import dayjs from 'dayjs';
 
 type NeedType = 'all' | 'not_entered' | 'incomplete';
+type RosterTab = 'roster' | NeedType | 'feice';
 // 对应 Prisma MessageTemplateType（避免前端直接依赖 prisma 包）
 const MT_NEVER_ENTERED = 'NEVER_ENTERED' as const;
 const MT_INCOMPLETE    = 'INCOMPLETE'    as const;
@@ -11,7 +12,7 @@ const MT_INCOMPLETE    = 'INCOMPLETE'    as const;
 export default function TaskDetailPage() {
   const { taskId } = useParams();
   const nav = useNavigate();
-  const [rosterType, setRosterType] = useState<'roster' | NeedType>('roster');
+  const [rosterType, setRosterType] = useState<RosterTab>('roster');
   const [task, setTask] = useState<any>(null);
   const [list, setList] = useState<any[]>([]);
   const [total, setTotal] = useState(0);
@@ -34,7 +35,14 @@ export default function TaskDetailPage() {
 
   const loadList = async () => {
     try {
-      if (rosterType === 'roster') {
+      if (rosterType === 'feice') {
+        const courseId = task?.course?.id ?? task?.courseId;
+        if (!courseId) { setList([]); setTotal(0); return; }
+        const { data } = await api.get(`/feice/courses/${courseId}/watch-records`, {
+          params: { keyword: keyword || undefined },
+        });
+        setList(data); setTotal(data.length);
+      } else if (rosterType === 'roster') {
         const { data } = await api.get(`/courses/tasks/${taskId}/roster`, {
           params: { keyword: keyword || undefined, pageSize: 500 },
         });
@@ -57,7 +65,7 @@ export default function TaskDetailPage() {
   };
 
   useEffect(() => { loadTask(); }, [taskId]);
-  useEffect(() => { loadList(); }, [taskId, rosterType, keyword]);
+  useEffect(() => { loadList(); }, [taskId, rosterType, keyword, task?.course?.id]);
   useEffect(() => { setSelectedIds(new Set()); }, [rosterType, keyword]);
 
   const toggleOne = (id: number) => {
@@ -71,7 +79,7 @@ export default function TaskDetailPage() {
   };
 
   const openReminder = async () => {
-    if (rosterType === 'roster') {
+    if (rosterType === 'roster' || rosterType === 'feice') {
       setRosterType('all');
       return;
     }
@@ -123,6 +131,7 @@ export default function TaskDetailPage() {
     { k: 'roster' as const,        label: '应听名单快照', count: task?.totalRosterCount },
     { k: 'not_entered' as const,   label: '从未进入',       tone: 'amber', count: task?.notEnteredCount },
     { k: 'incomplete' as const,    label: '听课不足 60%',   tone: 'pink',  count: task?.incompleteCount },
+    { k: 'feice' as const,         label: '飞策听课记录',   tone: 'mint' },
   ]), [task]);
 
   const statusChip = (status: string) => {
@@ -232,12 +241,80 @@ export default function TaskDetailPage() {
           <input className="input w-64" placeholder="搜索客户"
             value={keyword} onChange={(e) => setKeyword(e.target.value)} />
           <div className="flex-1" />
-          <button onClick={toggleAll} className="btn-ghost !py-2">
-            {selectedIds.size === list.length && list.length > 0 ? '取消全选' : '全选当前页'}
-          </button>
+          {rosterType !== 'feice' && (
+            <button onClick={toggleAll} className="btn-ghost !py-2">
+              {selectedIds.size === list.length && list.length > 0 ? '取消全选' : '全选当前页'}
+            </button>
+          )}
         </div>
 
-        {/* 表 */}
+        {rosterType === 'feice' ? (
+          /* 飞策原始听课记录：昵称来自微信，未匹配企微也能查看 */
+          <div className="overflow-x-auto scroll-thin -mx-2 px-2">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-xs text-text-tertiary">
+                  <th className="py-3 pr-4">微信昵称（飞策）</th>
+                  <th className="py-3 pr-4">对应企微学员</th>
+                  <th className="py-3 pr-4">直播听课</th>
+                  <th className="py-3 pr-4">回放听课</th>
+                  <th className="py-3 pr-4">最大进度</th>
+                  <th className="py-3 pr-4">最后听课</th>
+                </tr>
+              </thead>
+              <tbody>
+                {list.length === 0 ? (
+                  <tr><td colSpan={6} className="text-center py-16 text-text-tertiary">
+                    暂无飞策听课记录，请先在课程库点「同步听课记录」
+                  </td></tr>
+                ) : list.map((r) => {
+                  const totalSec = task.course?.totalDuration ?? 1;
+                  const totalListen = r.liveDurationSec + r.replayDurationSec;
+                  const pct = Math.min(100, Math.round((Math.max(totalListen, r.maxProgressSec) / Math.max(totalSec, 1)) * 100));
+                  return (
+                    <tr key={r.personKey} className="border-t border-glass-border hover:bg-white/[0.02]">
+                      <td className="py-3 pr-4">
+                        <div className="flex items-center gap-3">
+                          <div className="h-9 w-9 rounded-full bg-gradient-to-br from-brand-500/40 to-accent-mint/30 grid place-items-center text-xs font-medium">
+                            {String(r.nickName ?? '·').slice(0, 1)}
+                          </div>
+                          <div className="font-medium">{r.nickName}</div>
+                        </div>
+                      </td>
+                      <td className="py-3 pr-4">
+                        {r.customerNickname
+                          ? <span className="chip !text-accent-mint">✓ {r.customerNickname}</span>
+                          : <span className="chip !text-text-tertiary" title="微信开放平台认证通过并重新同步客户后自动匹配">未匹配</span>}
+                      </td>
+                      <td className="py-3 pr-4 tabular-nums">
+                        {Math.round(r.liveDurationSec / 60)} 分钟
+                        {r.liveSessions > 0 && <div className="text-[11px] text-text-tertiary">{r.liveSessions} 次进入</div>}
+                      </td>
+                      <td className="py-3 pr-4 tabular-nums">
+                        {Math.round(r.replayDurationSec / 60)} 分钟
+                        {r.replaySessions > 0 && <div className="text-[11px] text-text-tertiary">{r.replaySessions} 次观看</div>}
+                      </td>
+                      <td className="py-3 pr-4 tabular-nums">
+                        {Math.round(r.maxProgressSec / 60)} 分钟 <span className="text-xs text-text-tertiary">/ {Math.round(totalSec / 60)}m</span>
+                        <div className="progress-bar w-28 mt-1.5"><span style={{ width: `${pct}%` }} /></div>
+                        <div className="text-[11px] text-text-tertiary mt-1">{pct}%</div>
+                      </td>
+                      <td className="py-3 pr-4 text-text-secondary">
+                        {r.lastWatchAt ? dayjs(r.lastWatchAt).format('MM-DD HH:mm') : '—'}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            {list.length > 0 && (
+              <div className="text-xs text-text-tertiary pt-2">
+                共 {total} 人 · 数据来自飞策直播/回放记录（按微信身份聚合）
+              </div>
+            )}
+          </div>
+        ) : (
+        /* 表 */
         <div className="overflow-x-auto scroll-thin -mx-2 px-2">
           <table className="w-full text-sm">
             <thead>
@@ -310,7 +387,8 @@ export default function TaskDetailPage() {
             </tbody>
           </table>
         </div>
-        {list.length > 0 && (
+        )}
+        {rosterType !== 'feice' && list.length > 0 && (
           <div className="text-xs text-text-tertiary pt-2">
             共 {total} 条 · 已选择 {selectedIds.size} 条
             {rosterType !== 'roster' && (
