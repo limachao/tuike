@@ -88,7 +88,8 @@ export class FeiceSyncService {
           cursor: `inserted=${inserted}`,
         },
       });
-      await this.postSyncRefresh(courseId);
+      // 仅在拉到新记录时刷新（身份匹配/重算开销大，空转周期跳过）
+      if (inserted > 0) await this.postSyncRefresh(courseId);
       return { total, inserted };
     } catch (e: any) {
       await this.prisma.syncLog.update({
@@ -132,7 +133,8 @@ export class FeiceSyncService {
           cursor: `inserted=${inserted}`,
         },
       });
-      await this.postSyncRefresh(courseId);
+      // 仅在拉到新记录时刷新（身份匹配/重算开销大，空转周期跳过）
+      if (inserted > 0) await this.postSyncRefresh(courseId);
       return { total, inserted };
     } catch (e: any) {
       await this.prisma.syncLog.update({
@@ -149,6 +151,7 @@ export class FeiceSyncService {
       data: { type: 'FEICE_INVITE_RECORDS', triggeredBy, triggeredSource: 'manual' },
     });
     let total = 0;
+    let inserted = 0;
     try {
       const params: any = {};
       if (courseId) {
@@ -161,7 +164,8 @@ export class FeiceSyncService {
         const r: any = await this.api.listInviteRecords({ ...params, offset });
         for (const item of r.list) {
           total++;
-          await this.handleInviteRecord(item);
+          const changed = await this.handleInviteRecord(item);
+          if (changed) inserted++;
         }
         if (r.list.length < 20) hasMore = false;
         else offset += 20;
@@ -170,8 +174,9 @@ export class FeiceSyncService {
         where: { id: log.id },
         data: { endedAt: new Date(), records: total, success: true },
       });
-      await this.postSyncRefresh(courseId);
-      return { synced: total };
+      // 仅在有新身份时刷新
+      if (inserted > 0) await this.postSyncRefresh(courseId);
+      return { synced: total, inserted };
     } catch (e: any) {
       await this.prisma.syncLog.update({
         where: { id: log.id },
@@ -405,7 +410,8 @@ export class FeiceSyncService {
    * 邀课记录处理：thirdPartyTraceId -> uid / thirdPartyStudentId 写入 feice_identities
    * 并找到对应的 customer，建立身份关联。
    */
-  private async handleInviteRecord(item: any) {
+  /** @returns 是否产生了新身份/新关联（用于跳过无谓的 postSyncRefresh） */
+  private async handleInviteRecord(item: any): Promise<boolean> {
     const thirdPartyTraceId = this.blankToNull(
       item.third_party_trace_id ?? item.thirdPartyTraceId,
     );
@@ -415,7 +421,7 @@ export class FeiceSyncService {
     );
     const mobile = this.blankToNull(item.mobile);
     const unionId = this.blankToNull(item.union_id ?? item.unionId);
-    if (!thirdPartyTraceId && !uid && !thirdPartyStudentId) return;
+    if (!thirdPartyTraceId && !uid && !thirdPartyStudentId) return false;
 
     // 找 customer
     const customer = thirdPartyTraceId
@@ -452,6 +458,7 @@ export class FeiceSyncService {
           matchedAt: new Date(),
         },
       });
+      return true;
     } else {
       await this.prisma.feiceIdentity.update({
         where: { id: identity.id },
@@ -470,7 +477,9 @@ export class FeiceSyncService {
         where: { thirdPartyTraceId: String(thirdPartyTraceId), customerId: null },
         data: { customerId, isConfirmed: true, matchLevel: 1, matchedAt: new Date() },
       });
+      return true;
     }
+    return false;
   }
 
   /**

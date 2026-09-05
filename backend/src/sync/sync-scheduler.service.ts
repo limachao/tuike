@@ -81,31 +81,40 @@ export class SyncSchedulerService implements OnApplicationBootstrap {
         take: 20,
         orderBy: { updatedAt: 'desc' },
       });
+      let inserted = 0;
       for (const c of activeCourses) {
         try {
-          await this.feice.syncLiveRecords(c.id);
-          await this.feice.syncReplayRecords(c.id);
-          await this.feice.syncInviteRecords(c.id);
+          const live = await this.feice.syncLiveRecords(c.id);
+          const replay = await this.feice.syncReplayRecords(c.id);
+          const invite = await this.feice.syncInviteRecords(c.id);
+          inserted +=
+            (live.inserted ?? 0) + (replay.inserted ?? 0) + (invite.inserted ?? 0);
         } catch (e) {
           this.logger.warn(
             `课程#${c.id}数据同步失败: ${(e as Error).message}`,
           );
         }
       }
-      // 重算身份 + 听课
-      await this.identity.runFullMatch();
-      const tasks = await this.prisma.courseMonitoringTask.findMany({
-        where: { isActive: true },
-        select: { id: true },
-      });
-      for (const t of tasks) {
-        try {
-          await this.attendance.recomputeTask(t.id);
-        } catch (e) {
-          this.logger.warn(`任务#${t.id}听课重算失败: ${(e as Error).message}`);
+      // 仅在有新数据时重算身份+听课（空转周期零重载）
+      if (inserted > 0) {
+        await this.identity.runFullMatch();
+        const tasks = await this.prisma.courseMonitoringTask.findMany({
+          where: { isActive: true },
+          select: { id: true },
+        });
+        for (const t of tasks) {
+          try {
+            await this.attendance.recomputeTask(t.id);
+          } catch (e) {
+            this.logger.warn(`任务#${t.id}听课重算失败: ${(e as Error).message}`);
+          }
         }
+        this.logger.log(
+          `[Cron] 飞策同步完成（新增 ${inserted} 条，重算任务）`,
+        );
+      } else {
+        this.logger.log('[Cron] 飞策同步完成（无新数据，跳过重算）');
       }
-      this.logger.log(`[Cron] 飞策同步完成（处理 ${tasks.length} 个任务）`);
     } catch (e) {
       this.logger.error(`[Cron] 飞策同步失败: ${(e as Error).message}`);
     }
