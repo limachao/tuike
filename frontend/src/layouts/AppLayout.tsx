@@ -6,6 +6,7 @@ const MENU = [
   { to: '/courses', label: '课程库', icon: '◉', roles: ['SALES', 'SUPERVISOR', 'SUPER_ADMIN'] },
   { to: '/tasks/new', label: '新建任务', icon: '＋', roles: ['SUPERVISOR', 'SUPER_ADMIN'] },
   { to: '/reminders', label: '提醒任务', icon: '✉', roles: ['SALES', 'SUPERVISOR', 'SUPER_ADMIN'] },
+  { to: '/quick-send', label: '快捷群发', icon: '⚡', roles: ['SALES', 'SUPERVISOR', 'SUPER_ADMIN'] },
   { to: '/users', label: '用户管理', icon: '⚙', roles: ['SUPERVISOR', 'SUPER_ADMIN'] },
 ];
 
@@ -33,6 +34,7 @@ export default function AppLayout() {
               m.to === loc.pathname ||
               (m.to === '/tasks/new' && loc.pathname.startsWith('/tasks')) ||
               (m.to === '/reminders' && loc.pathname.startsWith('/reminders')) ||
+              (m.to === '/quick-send' && loc.pathname.startsWith('/quick-send')) ||
               (m.to === '/courses' && loc.pathname === '/courses');
             return (
               <NavLink

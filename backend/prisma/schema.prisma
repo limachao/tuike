@@ -375,6 +375,7 @@ enum GroupMessageStatus {
 enum MessageTemplateType {
   NEVER_ENTERED    // 从未进入模板
   INCOMPLETE       // 听课不足模板
+  CUSTOM           // 快捷群发自定义文案
 }
 
 model MessageTemplate {
@@ -394,7 +395,7 @@ model MessageTemplate {
 model WecomGroupMessageTask {
   id                Int                @id @default(autoincrement())
   taskNo            String             @unique @db.VarChar(50) // 业务唯一编号
-  monitoringTaskId  Int
+  monitoringTaskId  Int?
   createdBySalesId  Int
   // 模板
   templateId        Int?
@@ -402,7 +403,7 @@ model WecomGroupMessageTask {
   templateType      MessageTemplateType
   // 实际发送内容（最终保存版本）
   finalContent      String             @db.Text
-  finalUrl          String             @db.VarChar(500) // 课程中转页URL
+  finalUrl          String             @db.VarChar(500)
   // 入口类型
   entryType         String             @default("live") @db.VarChar(20) // live / replay
   // 企业微信
@@ -421,7 +422,7 @@ model WecomGroupMessageTask {
   createdAt         DateTime           @default(now())
   updatedAt         DateTime           @updatedAt
 
-  monitoringTask    CourseMonitoringTask @relation(fields: [monitoringTaskId], references: [id], onDelete: Cascade)
+  monitoringTask    CourseMonitoringTask? @relation(fields: [monitoringTaskId], references: [id], onDelete: Cascade)
   createdBy         User                 @relation(fields: [createdBySalesId], references: [id])
   recipients        WecomGroupMessageRecipient[]
 
@@ -433,7 +434,7 @@ model WecomGroupMessageTask {
 model WecomGroupMessageRecipient {
   id                 Int       @id @default(autoincrement())
   messageTaskId      Int
-  rosterEntryId      Int
+  rosterEntryId      Int?
   customerId         Int
   externalUserid     String    @db.VarChar(100)
   // 发送结果
@@ -452,7 +453,7 @@ model WecomGroupMessageRecipient {
   createdAt          DateTime  @default(now())
 
   messageTask        WecomGroupMessageTask @relation(fields: [messageTaskId], references: [id], onDelete: Cascade)
-  roster             CourseRoster          @relation(fields: [rosterEntryId], references: [id], onDelete: Cascade)
+  roster             CourseRoster?         @relation(fields: [rosterEntryId], references: [id], onDelete: Cascade)
   customer           Customer              @relation(fields: [customerId], references: [id], onDelete: Cascade)
 
   @@unique([messageTaskId, customerId])

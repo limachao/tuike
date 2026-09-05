@@ -57,6 +57,21 @@ export class ReminderController {
     return this.reminder.createAndSubmit({ ...body, operatorId: u.sub });
   }
 
+  // ============ 快捷群发 ============
+  @Post('quick-send')
+  quickSend(
+    @Body()
+    body: {
+      content: string;
+      url: string;
+      customerIds: number[];
+      linkTitle?: string;
+    },
+    @CurrentUser() u: JwtUserPayload,
+  ) {
+    return this.reminder.quickSend({ ...body, operatorId: u.sub });
+  }
+
   // ============ 任务状态 ============
   @Get('message-tasks')
   listMyTasks(

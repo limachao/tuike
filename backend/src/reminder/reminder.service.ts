@@ -342,6 +342,79 @@ export class ReminderService {
     return { updated: r.count };
   }
 
+  // ============ 快捷群发 ============
+
+  /**
+   * 快捷群发：不建监控任务，直接选客户 + 写文案 + 发送
+   * MVP 流程：选人 → 写文案+网址 → 提交企微 → 销售手机确认 → 客户收到
+   */
+  async quickSend(params: {
+    operatorId: number;
+    content: string;
+    url: string;
+    customerIds: number[];
+    linkTitle?: string;
+  }) {
+    const { content, url, customerIds, linkTitle = '点击进入' } = params;
+    if (!content?.trim()) throw new BadRequestException('文案不能为空');
+    if (!url?.trim()) throw new BadRequestException('网址不能为空');
+    if (!customerIds?.length) throw new BadRequestException('请至少选择一位客户');
+    if (customerIds.length > 10000) throw new BadRequestException('单次最多 10000 人');
+
+    // 查客户（只取属于该销售名下的有效客户）
+    const customers = await this.prisma.customer.findMany({
+      where: {
+        id: { in: customerIds },
+        isDeleted: false,
+        relations: { some: { salesUserId: params.operatorId, status: 'active' } },
+      },
+      select: { id: true, externalUserid: true, nickname: true },
+    });
+    if (customers.length === 0) throw new BadRequestException('选中的客户均不在你名下');
+
+    const taskNo = `QS${Date.now()}${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
+    const groupTask = await this.prisma.wecomGroupMessageTask.create({
+      data: {
+        taskNo,
+        monitoringTaskId: null,
+        createdBySalesId: params.operatorId,
+        templateType: MessageTemplateType.CUSTOM,
+        finalContent: content.trim(),
+        finalUrl: url.trim(),
+        entryType: 'live',
+        status: GroupMessageStatus.DRAFT,
+        totalRecipients: customers.length,
+        recipients: {
+          create: customers.map((c) => ({
+            customerId: c.id,
+            externalUserid: c.externalUserid,
+          })),
+        },
+      },
+      include: { recipients: true },
+    });
+
+    try {
+      await this.wecomGroup.submitToWecom(groupTask.id);
+    } catch (e: any) {
+      await this.prisma.wecomGroupMessageTask.update({
+        where: { id: groupTask.id },
+        data: { status: GroupMessageStatus.FAILED },
+      });
+      throw e;
+    }
+
+    await this.audit.log({
+      userId: params.operatorId,
+      action: 'quick_send',
+      targetType: 'message_task',
+      targetId: groupTask.id,
+      detail: JSON.stringify({ recipients: customers.length }),
+    });
+
+    return { messageTask: groupTask };
+  }
+
   // ============ 模板 ============
   async getDefaultTemplate(type: MessageTemplateType) {
     return this.prisma.messageTemplate.findFirst({

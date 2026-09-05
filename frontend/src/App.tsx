@@ -9,6 +9,7 @@ import TaskCreatePage from '@/pages/TaskCreatePage';
 import TaskDetailPage from '@/pages/TaskDetailPage';
 import ReminderTasksPage from '@/pages/ReminderTasksPage';
 import ReminderTaskDetailPage from '@/pages/ReminderTaskDetailPage';
+import QuickSendPage from '@/pages/QuickSendPage';
 import TransferPage from '@/pages/TransferPage';
 import UsersPage from '@/pages/UsersPage';
 
@@ -49,6 +50,7 @@ function App() {
         <Route path="tasks/:taskId" element={<TaskDetailPage />} />
         <Route path="reminders" element={<ReminderTasksPage />} />
         <Route path="reminders/:id" element={<ReminderTaskDetailPage />} />
+        <Route path="quick-send" element={<QuickSendPage />} />
         <Route
           path="users"
           element={
