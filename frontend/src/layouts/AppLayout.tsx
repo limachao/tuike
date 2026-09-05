@@ -24,8 +24,8 @@ export default function AppLayout() {
             <span className="text-[#1a1508] font-bold text-sm">推</span>
           </div>
           <div>
-            <div className="text-[15px] font-semibold tracking-tight">推课神器</div>
-            <div className="text-[11px] text-text-tertiary">当当老师研发，仅供内部使用</div>
+            <div className="text-[15px] font-semibold tracking-tight">推课方舟</div>
+            <div className="text-[11px] text-text-tertiary">用心做事，真诚做人（仅限两节课内部使用）</div>
           </div>
         </div>
 
