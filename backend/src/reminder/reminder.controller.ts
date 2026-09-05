@@ -58,6 +58,21 @@ export class ReminderController {
   }
 
   // ============ 快捷群发 ============
+  @Get('quick-send/customers')
+  quickSendCustomers(
+    @CurrentUser() u: JwtUserPayload,
+    @Query('keyword') keyword?: string,
+    @Query('addFrom') addFrom?: string,
+    @Query('addTo') addTo?: string,
+  ) {
+    return this.reminder.quickSendCustomers({
+      operatorId: u.sub,
+      keyword,
+      addFrom,
+      addTo,
+    });
+  }
+
   @Post('quick-send')
   quickSend(
     @Body()
