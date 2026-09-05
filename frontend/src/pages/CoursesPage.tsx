@@ -9,6 +9,11 @@ export default function CoursesPage() {
   const [kw, setKw] = useState('');
   const [playingId, setPlayingId] = useState<number | null>(null);
   const [syncingId, setSyncingId] = useState<number | null>(null);
+  // 听课记录弹窗
+  const [recCourse, setRecCourse] = useState<any | null>(null);
+  const [recList, setRecList] = useState<any[]>([]);
+  const [recKw, setRecKw] = useState('');
+  const [recLoading, setRecLoading] = useState(false);
 
   const load = async () => {
     const { data } = await api.get('/feice/courses', { params: { keyword: kw || undefined } });
@@ -34,6 +39,36 @@ export default function CoursesPage() {
       alert(e?.response?.data?.message ?? '同步失败，请稍后重试');
     } finally {
       setSyncingId(null);
+    }
+  };
+
+  /** 打开某门课的飞策听课记录 */
+  const openRecords = async (c: any) => {
+    setRecCourse(c);
+    setRecKw('');
+    setRecList([]);
+    setRecLoading(true);
+    try {
+      const { data } = await api.get(`/feice/courses/${c.id}/watch-records`);
+      setRecList(Array.isArray(data) ? data : []);
+    } catch (e: any) {
+      alert(e?.response?.data?.message ?? '获取听课记录失败');
+      setRecCourse(null);
+    } finally {
+      setRecLoading(false);
+    }
+  };
+
+  const searchRecords = async () => {
+    if (!recCourse) return;
+    setRecLoading(true);
+    try {
+      const { data } = await api.get(`/feice/courses/${recCourse.id}/watch-records`, {
+        params: { keyword: recKw || undefined },
+      });
+      setRecList(Array.isArray(data) ? data : []);
+    } finally {
+      setRecLoading(false);
     }
   };
 
@@ -139,16 +174,128 @@ export default function CoursesPage() {
                     建立监控任务
                   </button>
                 </div>
-                <button
-                  onClick={() => syncRecords(c)}
-                  disabled={syncingId === c.id}
-                  className="btn-ghost w-full mt-2 text-xs"
-                >
-                  {syncingId === c.id ? '同步中…' : '↻ 同步听课记录'}
-                </button>
+                <div className="flex gap-2 mt-2">
+                  <button
+                    onClick={() => openRecords(c)}
+                    className="btn-ghost flex-1 text-xs"
+                  >
+                    📊 听课记录
+                  </button>
+                  <button
+                    onClick={() => syncRecords(c)}
+                    disabled={syncingId === c.id}
+                    className="btn-ghost flex-1 text-xs"
+                  >
+                    {syncingId === c.id ? '同步中…' : '↻ 同步听课记录'}
+                  </button>
+                </div>
               </div>
             </div>
           ))}
+        </div>
+      )}
+
+      {/* 飞策听课记录弹窗 */}
+      {recCourse && (
+        <div
+          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40 grid place-items-center p-4"
+          onClick={() => setRecCourse(null)}
+        >
+          <div
+            className="glass-card-strong w-full max-w-4xl max-h-[85vh] flex flex-col p-6"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start justify-between gap-4 mb-4">
+              <div className="min-w-0">
+                <div className="text-[11px] text-text-tertiary uppercase tracking-widest">Feice Records</div>
+                <h2 className="text-lg font-semibold tracking-tight truncate">
+                  {recCourse.name} · 听课记录
+                </h2>
+                <div className="text-xs text-text-tertiary mt-1">
+                  共 {recList.length} 人观看 · 昵称来自飞策微信授权
+                </div>
+              </div>
+              <button onClick={() => setRecCourse(null)} className="btn-ghost !py-2 shrink-0">关闭</button>
+            </div>
+
+            <div className="flex gap-2 mb-3">
+              <input
+                className="input flex-1"
+                placeholder="搜索微信昵称 / 学员名"
+                value={recKw}
+                onChange={(e) => setRecKw(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && searchRecords()}
+              />
+              <button onClick={searchRecords} className="btn-ghost">搜索</button>
+            </div>
+
+            <div className="overflow-y-auto scroll-thin flex-1">
+              {recLoading ? (
+                <div className="text-center py-16 text-text-tertiary">加载中…</div>
+              ) : recList.length === 0 ? (
+                <div className="text-center py-16 text-text-tertiary">
+                  暂无听课记录，请先点该课程卡片上的「↻ 同步听课记录」
+                </div>
+              ) : (
+                <table className="w-full text-sm">
+                  <thead className="sticky top-0 bg-[#1c1c28]/95 backdrop-blur z-10">
+                    <tr className="text-left text-xs text-text-tertiary">
+                      <th className="py-3 pr-4">微信昵称（飞策）</th>
+                      <th className="py-3 pr-4">对应学员</th>
+                      <th className="py-3 pr-4">直播听课</th>
+                      <th className="py-3 pr-4">回放听课</th>
+                      <th className="py-3 pr-4">最大进度</th>
+                      <th className="py-3 pr-4">最后听课</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {recList.map((r) => {
+                      const totalSec = recCourse.totalDuration ?? 1;
+                      const totalListen = r.liveDurationSec + r.replayDurationSec;
+                      const pct = Math.min(100, Math.round((Math.max(totalListen, r.maxProgressSec) / Math.max(totalSec, 1)) * 100));
+                      return (
+                        <tr key={r.personKey} className="border-t border-glass-border hover:bg-white/[0.02]">
+                          <td className="py-3 pr-4">
+                            <div className="flex items-center gap-3">
+                              <div className="h-9 w-9 rounded-full bg-gradient-to-br from-brand-500/40 to-accent-mint/30 grid place-items-center text-xs font-medium shrink-0">
+                                {String(r.nickName ?? '·').slice(0, 1)}
+                              </div>
+                              <div className="font-medium">{r.nickName}</div>
+                            </div>
+                          </td>
+                          <td className="py-3 pr-4">
+                            {r.customerNickname
+                              ? <span className="chip !text-accent-mint">✓ {r.customerNickname}</span>
+                              : <span className="chip !text-text-tertiary">未匹配</span>}
+                          </td>
+                          <td className="py-3 pr-4 tabular-nums">
+                            {Math.round(r.liveDurationSec / 60)} 分钟
+                            {r.liveSessions > 0 && <div className="text-[11px] text-text-tertiary">{r.liveSessions} 次进入</div>}
+                          </td>
+                          <td className="py-3 pr-4 tabular-nums">
+                            {Math.round(r.replayDurationSec / 60)} 分钟
+                            {r.replaySessions > 0 && <div className="text-[11px] text-text-tertiary">{r.replaySessions} 次观看</div>}
+                          </td>
+                          <td className="py-3 pr-4 tabular-nums">
+                            {Math.round(r.maxProgressSec / 60)} 分钟 <span className="text-xs text-text-tertiary">/ {Math.round(totalSec / 60)}m</span>
+                            <div className="progress-bar w-24 mt-1.5"><span style={{ width: `${pct}%` }} /></div>
+                            <div className="text-[11px] text-text-tertiary mt-1">{pct}%</div>
+                          </td>
+                          <td className="py-3 pr-4 text-text-secondary whitespace-nowrap">
+                            {r.lastWatchAt ? dayjs(r.lastWatchAt).format('MM-DD HH:mm') : '—'}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
+            </div>
+
+            <div className="text-[11px] text-text-tertiary pt-3">
+              「未匹配」指尚未与企微学员名单自动对应；微信开放平台认证通过并重新同步客户后会自动匹配，不影响此处查看听课数据。
+            </div>
+          </div>
         </div>
       )}
     </div>
