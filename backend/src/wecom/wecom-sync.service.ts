@@ -13,6 +13,20 @@ import * as crypto from 'crypto';
  * 4. 处理客户归属关系（主跟进人 + 多对多）
  * 5. 写入同步日志
  */
+/** 批量同步的单个客户行（detail 保留用于批量失败时逐条降级） */
+interface CustomerSyncRow {
+  externalUserid: string;
+  nickname: string;
+  avatar: string | null;
+  gender: number;
+  remarkMobiles: string | null;
+  mobileEncrypted: string | null;
+  wecomUnionid: string | null;
+  tags: string | null;
+  addTime: Date | null;
+  detail: any;
+}
+
 @Injectable()
 export class WecomSyncService {
   private readonly logger = new Logger(WecomSyncService.name);
@@ -86,6 +100,7 @@ export class WecomSyncService {
     try {
       let cursor: string | undefined;
       const seenExternalUserids = new Set<string>();
+      const rows: CustomerSyncRow[] = [];
       do {
         const { list, nextCursor } = await this.api.getCustomersByUser(
           sales.wecomUserId,
@@ -95,11 +110,13 @@ export class WecomSyncService {
           const externalUserid = item?.external_contact?.external_userid;
           if (!externalUserid) continue;
           seenExternalUserids.add(externalUserid);
-          await this.upsertCustomer(externalUserid, sales.id, item);
+          rows.push(this.extractCustomerRow(externalUserid, item));
           total++;
         }
         cursor = nextCursor;
       } while (cursor);
+      // 批量落库：每 500 人一批，3 条 SQL 顶过去 ~1500 条逐条查询
+      await this.bulkUpsertCustomers(rows, sales.id);
       // 全量分页成功后，清理本次未返回的归属关系：
       // 客户已删除该销售/销售删除客户/离职继承后，企微接口不再返回，
       // 旧关系必须失效，否则客户会一直挂在已不跟进的销售名下。
@@ -224,6 +241,116 @@ export class WecomSyncService {
       update: { status: 'active', addTime: addTime ?? undefined },
     });
     return customer;
+  }
+
+  // ========= 批量同步（性能：万级客户从 ~6 万条 SQL 降到 ~120 条） =========
+
+  /** 从企微批量接口的单条返回中提取客户字段 */
+  private extractCustomerRow(externalUserid: string, detail: any): CustomerSyncRow {
+    const contact = detail?.external_contact ?? {};
+    const followInfo =
+      detail?.follow_info ??
+      (Array.isArray(detail?.follow_user)
+        ? detail.follow_user.find((f: any) => f.userid)
+        : null);
+    const remarkMobiles: string | null = followInfo?.remark_mobiles?.length
+      ? followInfo.remark_mobiles.join(',')
+      : null;
+    const followTimeRaw = followInfo?.createtime ?? followInfo?.add_time;
+    return {
+      externalUserid,
+      nickname: (contact.name ?? '未命名客户').trim() || '未命名客户',
+      avatar: contact.avatar ?? null,
+      gender: Number(contact.gender ?? 0),
+      remarkMobiles,
+      mobileEncrypted: remarkMobiles
+        ? crypto.createHash('sha256').update(remarkMobiles.split(',')[0]).digest('hex')
+        : null,
+      wecomUnionid: contact.unionid ?? null,
+      tags: JSON.stringify(contact.external_profile?.external_attr ?? []),
+      addTime: followTimeRaw ? new Date(Number(followTimeRaw) * 1000) : null,
+      detail,
+    };
+  }
+
+  /** 分块批量 upsert 客户 + 归属关系；任一分块失败降级为逐条写入 */
+  private async bulkUpsertCustomers(rows: CustomerSyncRow[], salesId: number) {
+    const CHUNK = 500;
+    for (let i = 0; i < rows.length; i += CHUNK) {
+      const chunk = rows.slice(i, i + CHUNK);
+      try {
+        const studentIds = chunk.map(() => `stu_${uuidv4().replace(/-/g, '').slice(0, 16)}`);
+        const traceIds = chunk.map(() => `tpt_${uuidv4().replace(/-/g, '').slice(0, 24)}`);
+        await this.prisma.$executeRaw`
+          INSERT INTO customers (
+            external_userid, nickname, avatar, gender, mobile_encrypted, "remarkMobiles",
+            wecom_unionid, tags, owner_user_id, student_id, third_party_trace_id,
+            first_add_time, last_synced_at, updated_at, is_deleted
+          )
+          SELECT ext, nick, av, g, mob, rm, uni, tg, owner, sid, tid, fat, now(), now(), false
+          FROM unnest(
+            ${chunk.map((r) => r.externalUserid)}::text[],
+            ${chunk.map((r) => r.nickname)}::text[],
+            ${chunk.map((r) => r.avatar)}::text[],
+            ${chunk.map((r) => r.gender)}::int[],
+            ${chunk.map((r) => r.mobileEncrypted)}::text[],
+            ${chunk.map((r) => r.remarkMobiles)}::text[],
+            ${chunk.map((r) => r.wecomUnionid)}::text[],
+            ${chunk.map((r) => r.tags)}::text[],
+            ${chunk.map(() => salesId)}::int[],
+            ${studentIds}::text[],
+            ${traceIds}::text[],
+            ${chunk.map((r) => r.addTime)}::timestamptz[]
+          ) AS t(ext, nick, av, g, mob, rm, uni, tg, owner, sid, tid, fat)
+          ON CONFLICT (external_userid) DO UPDATE SET
+            nickname = EXCLUDED.nickname,
+            avatar = EXCLUDED.avatar,
+            gender = EXCLUDED.gender,
+            "remarkMobiles" = EXCLUDED."remarkMobiles",
+            mobile_encrypted = COALESCE(EXCLUDED.mobile_encrypted, customers.mobile_encrypted),
+            tags = EXCLUDED.tags,
+            is_deleted = false,
+            last_synced_at = now(),
+            updated_at = now()
+        `;
+        const extList = chunk.map((r) => r.externalUserid);
+        const idRows: any[] = await this.prisma.$queryRaw`
+          SELECT id, external_userid, owner_user_id FROM customers
+          WHERE external_userid = ANY(${extList}::text[])
+        `;
+        const idMap = new Map<string, { id: number; owner: number }>(
+          idRows.map((r) => [r.external_userid, { id: Number(r.id), owner: Number(r.owner_user_id) }]),
+        );
+        const relRows = chunk.map((r) => ({
+          cid: idMap.get(r.externalUserid)?.id,
+          isPrimary: idMap.get(r.externalUserid)?.owner === salesId,
+          addTime: r.addTime,
+        })).filter((r) => r.cid);
+        await this.prisma.$executeRaw`
+          INSERT INTO customer_sales_relations ("customerId", "salesUserId", "addTime", "isPrimary", status)
+          SELECT cid, ${salesId}, fat, isp, 'active'
+          FROM unnest(
+            ${relRows.map((r) => r.cid!)}::int[],
+            ${relRows.map((r) => r.addTime)}::timestamptz[],
+            ${relRows.map((r) => r.isPrimary)}::boolean[]
+          ) AS t(cid, fat, isp)
+          ON CONFLICT ("customerId", "salesUserId") DO UPDATE SET
+            status = 'active',
+            "addTime" = COALESCE(
+              LEAST(customer_sales_relations."addTime", EXCLUDED."addTime"),
+              customer_sales_relations."addTime", EXCLUDED."addTime")
+        `;
+      } catch (e) {
+        this.logger.warn(`批量同步分块失败，降级为逐条写入: ${(e as Error).message}`);
+        for (const r of chunk) {
+          try {
+            await this.upsertCustomer(r.externalUserid, salesId, r.detail);
+          } catch (e2) {
+            this.logger.warn(`客户 ${r.externalUserid} 同步失败: ${(e2 as Error).message}`);
+          }
+        }
+      }
+    }
   }
 
   /**
