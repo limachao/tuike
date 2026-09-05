@@ -142,6 +142,28 @@ export class FeiceController {
       liveRoomId: course.feiceLiveRoomId,
       userId: u.sub,
     });
+    // 记录本次生成的链接，供快捷群发「手动生成过的回放链接」选用
+    await this.prisma.generatedLink.create({
+      data: {
+        type: course.status === 'LIVE' ? 'live' : 'replay',
+        liveRoomId: course.feiceLiveRoomId,
+        courseId: course.id,
+        title: course.name,
+        url: r.url,
+        createdBy: u.sub,
+      },
+    });
     return { url: r.url };
+  }
+
+  /** 我手动生成过的观看链接（快捷群发选用） */
+  @Get('generated-links')
+  async listGeneratedLinks(@CurrentUser() u: JwtUserPayload) {
+    const rows = await this.prisma.generatedLink.findMany({
+      where: { createdBy: u.sub },
+      orderBy: { id: 'desc' },
+      take: 50,
+    });
+    return rows;
   }
 }

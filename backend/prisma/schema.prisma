@@ -556,3 +556,21 @@ model AppConfig {
   updatedAt   DateTime @updatedAt
   @@map("app_configs")
 }
+
+// ================================
+// 10. 手动生成的观看链接
+// ================================
+
+model GeneratedLink {
+  id         Int      @id @default(autoincrement())
+  type       String   @db.VarChar(20) // replay / live
+  liveRoomId String   @db.VarChar(64)
+  courseId   Int?
+  title      String   @db.VarChar(200)
+  url        String   @db.VarChar(1000)
+  createdBy  Int
+  createdAt  DateTime @default(now())
+
+  @@index([createdBy, createdAt])
+  @@map("generated_links")
+}

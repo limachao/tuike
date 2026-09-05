@@ -8,8 +8,6 @@ const LISTEN_THRESHOLD_MIN = 100;
 
 export default function QuickSendPage() {
   const nav = useNavigate();
-  const [courses, setCourses] = useState<any[]>([]);
-  const [courseId, setCourseId] = useState<number | ''>('');
   const [content, setContent] = useState('');
   const [url, setUrl] = useState('');
   const [customers, setCustomers] = useState<any[]>([]);
@@ -40,21 +38,37 @@ export default function QuickSendPage() {
 
   useEffect(() => { loadCustomers(); }, [keyword, addFrom, addTo]);
 
-  // 预加载课程列表
+  // 链接来源：manual=手动填 / live=正在直播 / replay=我生成过的回放链接
+  const [linkSource, setLinkSource] = useState<'manual' | 'live' | 'replay'>('manual');
+  const [courses, setCourses] = useState<any[]>([]);
+  const [liveCourseId, setLiveCourseId] = useState<number | ''>('');
+  const [generatedLinks, setGeneratedLinks] = useState<any[]>([]);
+  const [genLinkId, setGenLinkId] = useState<number | ''>('');
+
   useEffect(() => {
     api.get('/feice/courses').then((r) => setCourses(Array.isArray(r.data) ? r.data : []));
+    api.get('/feice/generated-links').then((r) => setGeneratedLinks(Array.isArray(r.data) ? r.data : []));
   }, []);
 
-  // 选课程 → 自动生成追踪链接 + 默认文案
-  const selCourse = courses.find((c) => c.id === courseId);
-  const pickCourse = (id: number | '') => {
-    setCourseId(id);
+  const liveCourses = useMemo(() => courses.filter((c) => c.status === 'LIVE'), [courses]);
+
+  /** 选中直播课程 → 填入追踪链接 + 默认文案 */
+  const fillLive = (id: number | '') => {
+    setLiveCourseId(id);
     const c = courses.find((x) => x.id === id);
     if (c) {
       setUrl(`${window.location.origin}/course/${c.feiceLiveRoomId}`);
-      if (!content.trim()) {
-        setContent(`【${c.name}】上课啦！\n点击下方链接进入直播间听课：`);
-      }
+      if (!content.trim()) setContent(`【${c.name}】正在直播中！\n点击下方链接进入直播间听课：`);
+    }
+  };
+
+  /** 选中生成过的回放链接 → 填入链接 */
+  const fillGenerated = (id: number | '') => {
+    setGenLinkId(id);
+    const g = generatedLinks.find((x) => x.id === id);
+    if (g) {
+      setUrl(g.url);
+      if (!content.trim()) setContent(`【${g.title}】回放来了！\n点击下方链接观看：`);
     }
   };
 
@@ -137,23 +151,54 @@ export default function QuickSendPage() {
           {/* 文案输入 */}
           <div className="glass-card p-5 space-y-4">
             <div>
-              <label className="label">选择要推的课程（自动生成追踪链接）</label>
+              <label className="label">课程链接来源</label>
               <select
                 className="input"
-                value={courseId}
-                onChange={(e) => pickCourse(e.target.value ? Number(e.target.value) : '')}
+                value={linkSource}
+                onChange={(e) => setLinkSource(e.target.value as any)}
               >
-                <option value="">— 不推课程，手动填链接 —</option>
-                {courses.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}（{dayjs(c.startTime).format('MM-DD HH:mm')}）
-                  </option>
-                ))}
+                <option value="manual">请手动输入课程链接</option>
+                <option value="live">正在直播的课程</option>
+                <option value="replay">我手动生成过的回放链接</option>
               </select>
-              {selCourse && (
-                <div className="text-[11px] text-text-tertiary mt-1">
-                  链接已自动生成：学员点开 → 登录 → 进入{selCourse.status === 'LIVE' ? '直播' : '回放'}，听课自动归因到该学员
-                </div>
+              {linkSource === 'live' && (
+                liveCourses.length === 0 ? (
+                  <div className="text-[11px] text-text-tertiary mt-1">当前没有正在直播的课程</div>
+                ) : (
+                  <select
+                    className="input mt-2"
+                    value={liveCourseId}
+                    onChange={(e) => fillLive(e.target.value ? Number(e.target.value) : '')}
+                  >
+                    <option value="">— 选择直播间 —</option>
+                    {liveCourses.map((c) => (
+                      <option key={c.id} value={c.id}>{c.name}</option>
+                    ))}
+                  </select>
+                )
+              )}
+              {linkSource === 'replay' && (
+                generatedLinks.length === 0 ? (
+                  <div className="text-[11px] text-text-tertiary mt-1">
+                    还没有生成记录：到「课程库」点课程卡片的「▶ 观看回放」会自动记录
+                  </div>
+                ) : (
+                  <select
+                    className="input mt-2"
+                    value={genLinkId}
+                    onChange={(e) => fillGenerated(e.target.value ? Number(e.target.value) : '')}
+                  >
+                    <option value="">— 选择链接 —</option>
+                    {generatedLinks.map((g) => (
+                      <option key={g.id} value={g.id}>
+                        {g.title}（{dayjs(g.createdAt).format('MM-DD HH:mm')}生成）
+                      </option>
+                    ))}
+                  </select>
+                )
+              )}
+              {linkSource === 'manual' && (
+                <div className="text-[11px] text-text-tertiary mt-1">在下方「附带网址」里粘贴课程链接</div>
               )}
             </div>
             <div>
