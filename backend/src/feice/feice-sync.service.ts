@@ -394,7 +394,7 @@ export class FeiceSyncService {
     if (!identity) {
       await this.prisma.feiceIdentity.create({
         data: {
-          customerId: customerId ?? 0, // 0 代表未匹配；后续 IdentityService 会补
+          customerId: customerId ?? null, // null 代表未匹配；后续 IdentityService 会补
           uid,
           thirdPartyStudentId,
           thirdPartyTraceId: thirdPartyTraceId ? String(thirdPartyTraceId) : null,
@@ -420,7 +420,7 @@ export class FeiceSyncService {
     // customerId=0 的，通过 thirdPartyTraceId 回填
     if (customerId) {
       await this.prisma.feiceIdentity.updateMany({
-        where: { thirdPartyTraceId: String(thirdPartyTraceId), customerId: 0 },
+        where: { thirdPartyTraceId: String(thirdPartyTraceId), customerId: null },
         data: { customerId, isConfirmed: true, matchLevel: 1, matchedAt: new Date() },
       });
     }
@@ -458,7 +458,7 @@ export class FeiceSyncService {
     if (!existing) {
       await this.prisma.feiceIdentity.create({
         data: {
-          customerId: 0, // 0 代表未匹配；IdentityService 会按优先级补
+          customerId: null, // null 代表未匹配；IdentityService 会按优先级补
           uid,
           unionId,
           mobileHash,

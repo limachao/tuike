@@ -44,7 +44,7 @@ export class IdentityService {
   async matchIdentitiesToCustomers() {
     // 一次性拉取未匹配 identity（customerId=0）
     const identities = await this.prisma.feiceIdentity.findMany({
-      where: { customerId: 0 },
+      where: { customerId: null },
     });
     let updated = 0;
     for (const id of identities) {
@@ -90,14 +90,14 @@ export class IdentityService {
     // 3. 用 thirdPartyTraceId 从其他已确认的 identity 反查
     if (id.thirdPartyTraceId) {
       const other = await this.prisma.feiceIdentity.findFirst({
-        where: { thirdPartyTraceId: id.thirdPartyTraceId, customerId: { gt: 0 } },
+        where: { thirdPartyTraceId: id.thirdPartyTraceId, customerId: { not: null } },
       });
       if (other) return other.customerId;
     }
     // 4. uid 相同的其他已确认 identity
     if (id.uid) {
       const other = await this.prisma.feiceIdentity.findFirst({
-        where: { uid: id.uid, customerId: { gt: 0 }, isConfirmed: true },
+        where: { uid: id.uid, customerId: { not: null }, isConfirmed: true },
       });
       if (other) return other.customerId;
     }
@@ -106,7 +106,7 @@ export class IdentityService {
       const other = await this.prisma.feiceIdentity.findFirst({
         where: {
           thirdPartyStudentId: id.thirdPartyStudentId,
-          customerId: { gt: 0 },
+          customerId: { not: null },
           isConfirmed: true,
         },
       });
@@ -144,7 +144,7 @@ export class IdentityService {
     });
     let updated = 0;
     for (const r of rows) {
-      const where: any = { customerId: { gt: 0 } };
+      const where: any = { customerId: { not: null } };
       const OR: any[] = [];
       if (r.thirdPartyTraceId) OR.push({ thirdPartyTraceId: r.thirdPartyTraceId });
       if (r.thirdPartyStudentId) OR.push({ thirdPartyStudentId: r.thirdPartyStudentId });
@@ -170,7 +170,7 @@ export class IdentityService {
     });
     let updated = 0;
     for (const r of rows) {
-      const where: any = { customerId: { gt: 0 } };
+      const where: any = { customerId: { not: null } };
       const OR: any[] = [];
       if (r.thirdPartyStudentId) OR.push({ thirdPartyStudentId: r.thirdPartyStudentId });
       if (r.uid) OR.push({ uid: r.uid });
