@@ -177,6 +177,7 @@ export class WecomSyncService {
           gender,
           mobileEncrypted,
           remarkMobiles,
+          wecomUnionid,
           tags,
           ownerUserId: salesId,
           studentId,
