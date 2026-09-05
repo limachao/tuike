@@ -56,7 +56,10 @@ export class CoursesService {
     const where: any = { isDeleted: false };
     const isAdmin = viewerRole === 'SUPERVISOR' || viewerRole === 'SUPER_ADMIN';
     if (!isAdmin) {
-      where.ownerUserId = viewerUserId;
+      // 名下 = 与该销售存在有效归属关系（owner 可能已因删除/继承转交）
+      where.relations = {
+        some: { salesUserId: viewerUserId, status: 'active' },
+      };
     }
     if (keyword) {
       where.OR = [
