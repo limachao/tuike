@@ -117,13 +117,24 @@ export class WecomSyncService {
       } while (cursor);
       // 批量落库：每 500 人一批，3 条 SQL 顶过去 ~1500 条逐条查询
       await this.bulkUpsertCustomers(rows, sales.id);
+      // unionid 到手率观测：接口不返回 unionid（未绑微信开发者ID/主体不一致）时恒为 0，
+      // 用于快速定位听课记录匹配不到学员的问题
+      const withUnionid = rows.reduce((n, r) => n + (r.wecomUnionid ? 1 : 0), 0);
+      this.logger.log(
+        `[WeCom同步] 销售#${salesId}(${sales.wecomUserId}) 拉取 ${total} 个客户，带 unionid 的 ${withUnionid} 个`,
+      );
       // 全量分页成功后，清理本次未返回的归属关系：
       // 客户已删除该销售/销售删除客户/离职继承后，企微接口不再返回，
       // 旧关系必须失效，否则客户会一直挂在已不跟进的销售名下。
       await this.pruneStaleRelations(sales.id, seenExternalUserids);
       await this.prisma.syncLog.update({
         where: { id: syncLog.id },
-        data: { endedAt: new Date(), records: total, success: true },
+        data: {
+          endedAt: new Date(),
+          records: total,
+          success: true,
+          cursor: `unionid=${withUnionid}/${total}`,
+        },
       });
       return { salesId, synced: total };
     } catch (e: any) {
