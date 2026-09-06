@@ -289,6 +289,11 @@ export class FeiceApiService implements OnModuleInit {
       } catch {
         data = text;
       }
+      // 飞策偶发返回 null/空体（如课程刚开播的瞬间），给前端一个可读的错误而不是 JSON 语法错误
+      if (data === null || data === undefined || data === '') {
+        this.logger.error(`[Feice EMPTY] ${path} -> ${text.slice(0, 120)}`);
+        throw new Error('飞策返回了空响应（可能课程正在开播中），请稍后重试');
+      }
 
       if (!res.ok) {
         this.logger.error(`[Feice HTTP ${res.status}] ${path} -> ${text.slice(0, 300)}`);
