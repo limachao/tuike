@@ -286,7 +286,7 @@ export class WecomSyncService {
         const traceIds = chunk.map(() => `tpt_${uuidv4().replace(/-/g, '').slice(0, 24)}`);
         await this.prisma.$executeRaw`
           INSERT INTO customers (
-            external_userid, nickname, avatar, gender, mobile_encrypted, "remarkMobiles",
+            external_userid, nickname, avatar, gender, "mobileEncrypted", "remarkMobiles",
             wecom_unionid, tags, owner_user_id, student_id, third_party_trace_id,
             first_add_time, last_synced_at, updated_at, is_deleted
           )
@@ -310,7 +310,7 @@ export class WecomSyncService {
             avatar = EXCLUDED.avatar,
             gender = EXCLUDED.gender,
             "remarkMobiles" = EXCLUDED."remarkMobiles",
-            mobile_encrypted = COALESCE(EXCLUDED.mobile_encrypted, customers.mobile_encrypted),
+            "mobileEncrypted" = COALESCE(EXCLUDED."mobileEncrypted", customers."mobileEncrypted"),
             wecom_unionid = COALESCE(EXCLUDED.wecom_unionid, customers.wecom_unionid),
             tags = EXCLUDED.tags,
             is_deleted = false,
