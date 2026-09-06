@@ -308,6 +308,7 @@ export class WecomSyncService {
             gender = EXCLUDED.gender,
             "remarkMobiles" = EXCLUDED."remarkMobiles",
             mobile_encrypted = COALESCE(EXCLUDED.mobile_encrypted, customers.mobile_encrypted),
+            wecom_unionid = COALESCE(EXCLUDED.wecom_unionid, customers.wecom_unionid),
             tags = EXCLUDED.tags,
             is_deleted = false,
             last_synced_at = now(),
