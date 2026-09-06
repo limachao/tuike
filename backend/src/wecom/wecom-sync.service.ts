@@ -175,8 +175,10 @@ export class WecomSyncService {
     const gender = contact.gender ?? 0;
     const tags = JSON.stringify(contact.external_profile?.external_attr ?? []);
     const remarkMobiles = followInfo?.remark_mobiles?.join(',') ?? null;
-    // unionid：企微后台绑定微信开发者ID后 externalcontact/get 才会返回
-    const wecomUnionid = contact.unionid ?? null;
+    // unionid：企微后台绑定微信开发者ID后 externalcontact/get 才会返回。
+    // 注意企微对无 unionid 的客户可能返回空字符串 ""，而 wecom_unionid 有唯一约束，
+    // 多个 "" 会触发唯一冲突导致整条批量 SQL 失败，这里统一归一为 null。
+    const wecomUnionid = contact.unionid ? contact.unionid : null;
     // 脱敏存储手机号（SHA256 便于匹配飞策 mobile，不可逆）
     const mobileEncrypted = remarkMobiles
       ? crypto.createHash('sha256').update(remarkMobiles.split(',')[0]).digest('hex')
@@ -266,7 +268,8 @@ export class WecomSyncService {
       mobileEncrypted: remarkMobiles
         ? crypto.createHash('sha256').update(remarkMobiles.split(',')[0]).digest('hex')
         : null,
-      wecomUnionid: contact.unionid ?? null,
+      // 空字符串归一为 null（wecom_unionid 有唯一约束，多个 '' 会冲突）
+      wecomUnionid: contact.unionid ? contact.unionid : null,
       tags: JSON.stringify(contact.external_profile?.external_attr ?? []),
       addTime: followTimeRaw ? new Date(Number(followTimeRaw) * 1000) : null,
       detail,
@@ -287,7 +290,7 @@ export class WecomSyncService {
             wecom_unionid, tags, owner_user_id, student_id, third_party_trace_id,
             first_add_time, last_synced_at, updated_at, is_deleted
           )
-          SELECT ext, nick, av, g, mob, rm, uni, tg, owner, sid, tid, fat, now(), now(), false
+          SELECT ext, nick, av, g, mob, rm, NULLIF(uni, '') AS uni, tg, owner, sid, tid, fat, now(), now(), false
           FROM unnest(
             ${chunk.map((r) => r.externalUserid)}::text[],
             ${chunk.map((r) => r.nickname)}::text[],
@@ -342,12 +345,18 @@ export class WecomSyncService {
               customer_sales_relations."addTime", EXCLUDED."addTime")
         `;
       } catch (e) {
-        this.logger.warn(`批量同步分块失败，降级为逐条写入: ${(e as Error).message}`);
+        // 打印完整错误（含 Prisma/Postgres 原因），否则只看到空信息无法排查
+        this.logger.error(
+          `批量同步分块失败（销售#${salesId}，第 ${Math.floor(i / CHUNK) + 1} 块，${chunk.length} 人），降级为逐条写入`,
+          e instanceof Error ? e.stack ?? e.message : String(e),
+        );
         for (const r of chunk) {
           try {
             await this.upsertCustomer(r.externalUserid, salesId, r.detail);
           } catch (e2) {
-            this.logger.warn(`客户 ${r.externalUserid} 同步失败: ${(e2 as Error).message}`);
+            this.logger.warn(
+              `客户 ${r.externalUserid} 同步失败: ${(e2 as Error).message}`,
+            );
           }
         }
       }

@@ -200,12 +200,20 @@ export class WecomApiService implements OnModuleInit {
     retryCount = 0,
   ): Promise<T> {
     try {
+      // 20 秒超时：企微接口偶发不响应时不能让同步永久挂起（undici 默认超时长达数分钟）
       const res = await fetch(url, {
         method,
         headers: body ? { 'Content-Type': 'application/json' } : undefined,
         body: body ? JSON.stringify(body) : undefined,
+        signal: AbortSignal.timeout(20000),
       });
-      const data = await res.json().catch(() => ({}));
+      const text = await res.text();
+      let data: any;
+      try {
+        data = text ? JSON.parse(text) : {};
+      } catch {
+        data = {};
+      }
       // 企业微信 429 / token 失效处理
       if (data && typeof data === 'object' && 'errcode' in data) {
         const code = Number(data.errcode);
@@ -226,7 +234,12 @@ export class WecomApiService implements OnModuleInit {
           `[WeCom errcode=${code}] ${data.errmsg ?? 'unknown error'}`,
         );
       }
-      return data as T;
+      // token 接口成功响应没有 errcode 但带 access_token
+      if (data && typeof data === 'object' && data.access_token) return data as T;
+      // 其余情况（网关错误页/空响应/非 JSON）不能当成功返回，否则会被误判成"0 个客户"
+      throw new Error(
+        `企微接口返回非预期响应 HTTP ${res.status}: ${(text || '').slice(0, 120)}`,
+      );
     } catch (e: any) {
       if (e instanceof Error && e.message.includes('errcode')) throw e;
       if (retryCount < 3) {
