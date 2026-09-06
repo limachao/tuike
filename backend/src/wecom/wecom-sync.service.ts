@@ -288,7 +288,7 @@ export class WecomSyncService {
           INSERT INTO customers (
             external_userid, nickname, avatar, gender, "mobileEncrypted", "remarkMobiles",
             wecom_unionid, tags, owner_user_id, student_id, third_party_trace_id,
-            first_add_time, last_synced_at, updated_at, is_deleted
+            "firstAddTime", "lastSyncedAt", "updatedAt", "isDeleted"
           )
           SELECT ext, nick, av, g, mob, rm, NULLIF(uni, '') AS uni, tg, owner, sid, tid, fat, now(), now(), false
           FROM unnest(
@@ -313,9 +313,9 @@ export class WecomSyncService {
             "mobileEncrypted" = COALESCE(EXCLUDED."mobileEncrypted", customers."mobileEncrypted"),
             wecom_unionid = COALESCE(EXCLUDED.wecom_unionid, customers.wecom_unionid),
             tags = EXCLUDED.tags,
-            is_deleted = false,
-            last_synced_at = now(),
-            updated_at = now()
+            "isDeleted" = false,
+            "lastSyncedAt" = now(),
+            "updatedAt" = now()
         `;
         const extList = chunk.map((r) => r.externalUserid);
         const idRows: any[] = await this.prisma.$queryRaw`
