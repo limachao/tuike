@@ -32,7 +32,10 @@ export default function CoursesPage() {
       await Promise.all([
         api.post(`/feice/sync/course/${c.id}/live-records`),
         api.post(`/feice/sync/course/${c.id}/replay-records`),
-        api.post('/feice/sync/invite-records', null, { params: { courseId: c.id } }),
+        // 注意：data 不能传 null —— axios 会把 null 序列化成字面量 "null" 发给后端，
+        // 被 NestJS body-parser（strict 模式）以 400 拒绝，报 "Unexpected token 'n'"。
+        // 传 {} 表示合法的 JSON 空对象请求体。
+        api.post('/feice/sync/invite-records', {}, { params: { courseId: c.id } }),
       ]);
       alert(`「${c.name}」听课记录同步完成，可去监控任务查看数据`);
     } catch (e: any) {
