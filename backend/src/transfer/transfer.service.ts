@@ -334,33 +334,48 @@ export class TransferService {
     const course = await this.prisma.course.findFirstOrThrow({
       where: { feiceLiveRoomId },
     });
-    if (!customer.thirdPartyTraceId) {
-      throw new BadRequestException('该学生缺少追踪ID，请联系管理员');
-    }
-    // 飞策邀课链接接口要求 userId/mobile 至少一个。
-    // 实测：传飞策学员 uid 可能报「用户不存在」，手机号路径已验证可行（内部观看同接口）。
-    // 因此依次尝试 uid → 备注手机号，全部失败时抛可读的业务错误（避免 500）。
+    // 飞策邀课链接候选路径（2026-09-08 实测，按优先级逐个尝试）：
+    //  1. 学员飞策 uid（直播记录 uid 是 85 开头，邀课接口通常不认，保留尝试）
+    //  2. 学员备注手机号（须已在飞策建档）
+    //  3. 该直播间销售的 SCRM 通用邀课链接（78 开头 userId，实测稳定成功）
+    //  4. 内部手机号链接（最终兜底，需配置 FEICE_INTERNAL_MOBILE）
+    // 学员在微信里打开链接后走飞策自己的微信登录，听课记录按学员本人 unionId 归因。
     const identity = await this.prisma.feiceIdentity.findFirst({
       where: { customerId: customer.id, uid: { not: null } },
       orderBy: { matchLevel: 'desc' },
     });
     const firstMobile = (customer.remarkMobiles ?? '').split(',').find(Boolean);
-    const attempts: Array<{ userId?: string; mobile?: string }> = [];
-    if (identity?.uid) attempts.push({ userId: identity.uid });
-    if (firstMobile) attempts.push({ mobile: firstMobile });
-    if (!attempts.length) {
-      throw new BadRequestException(
-        '该学生暂无飞策身份和手机号，无法生成课程入口，请联系管理员',
+    const producers: Array<() => Promise<{ url: string }>> = [];
+    if (identity?.uid) {
+      producers.push(() =>
+        this.feice.buildEntryUrl({
+          liveRoomId: course.feiceLiveRoomId,
+          thirdPartyTraceId: customer.thirdPartyTraceId ?? undefined,
+          userId: identity.uid ?? undefined,
+        }),
       );
     }
-    let lastErr: any = null;
-    for (const attempt of attempts) {
-      try {
-        const feiceUrl = await this.feice.buildEntryUrl({
+    if (firstMobile) {
+      producers.push(() =>
+        this.feice.buildEntryUrl({
           liveRoomId: course.feiceLiveRoomId,
-          thirdPartyTraceId: customer.thirdPartyTraceId,
-          ...attempt,
-        });
+          thirdPartyTraceId: customer.thirdPartyTraceId ?? undefined,
+          mobile: firstMobile,
+        }),
+      );
+    }
+    producers.push(() => this.feice.buildRoomSalesInviteUrl(course.feiceLiveRoomId));
+    producers.push(() =>
+      this.feice.buildInternalPlayUrl({
+        liveRoomId: course.feiceLiveRoomId,
+        userId: customer.id,
+      }),
+    );
+
+    let lastErr: any = null;
+    for (const produce of producers) {
+      try {
+        const feiceUrl = await produce();
         // 更新 visit
         const now = new Date();
         await this.prisma.transferPageVisit.updateMany({
