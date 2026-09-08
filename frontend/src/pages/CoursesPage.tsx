@@ -87,6 +87,12 @@ export default function CoursesPage() {
   };
 
   const play = async (c: any) => {
+    // 点播视频课程（飞策手动生成的回放，vod- 前缀）：播放地址是 m3u8，
+    // 桌面浏览器无法直接打开，跳转内置 hls.js 播放页
+    if (c.feiceLiveRoomId?.startsWith('vod-')) {
+      nav(`/play/${c.id}`, { state: { name: c.name } });
+      return;
+    }
     setPlayingId(c.id);
     try {
       const { data } = await api.get(`/feice/courses/${c.id}/play-link`);

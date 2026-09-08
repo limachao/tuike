@@ -130,6 +130,41 @@ export class FeiceApiService implements OnModuleInit {
   }
 
   /**
+   * 点播视频列表（飞策后台手动生成的回放课程）
+   * 实测（2026-09-08）：path = /live-manage/open/video/list，
+   * 必填 createTime（毫秒时间戳，29 天限制同其他接口）+ offset（每页 20）；
+   * 传 startTime/offset 等其他参数名会返回 code=-1 操作异常。
+   * 字段：id, videoName, videoType, videoSource, createTime, playUrl（m3u8，带签名会过期）
+   */
+  async listVideos(params: { createTime?: number; offset?: number } = {}) {
+    if (this.isMock()) return { list: [], total: 0 };
+
+    const path = '/live-manage/open/video/list';
+    const now = Date.now();
+    const maxPast = now - 29 * 24 * 3600 * 1000;
+    const userStart = params.createTime ?? maxPast;
+    const createTime = String(Math.min(Math.max(userStart, maxPast), now));
+    const offset = String(params.offset ?? 0);
+
+    const r = await this.signedRequest<any>('GET', path, { createTime, offset });
+    const list = Array.isArray(r.data) ? r.data : r.data?.list ?? [];
+    return { list, total: list.length };
+  }
+
+  /** 按视频 id 实时获取最新播放地址（playUrl 带签名会过期，必须在播放时现取） */
+  async getVideoPlayUrl(videoId: string): Promise<string | null> {
+    let offset = 0;
+    for (let page = 0; page < 5; page++) {
+      const r = await this.listVideos({ offset });
+      const hit = (r.list ?? []).find((v: any) => String(v.id) === String(videoId));
+      if (hit?.playUrl) return String(hit.playUrl);
+      if ((r.list?.length ?? 0) < 20) break;
+      offset += 20;
+    }
+    return null;
+  }
+
+  /**
    * 邀课记录列表 GET /live-manage/open/invitation-record/list
    * 文档（2026-09-05 实读+实测）：必填时间参数名是 appointmentTime（预约时间戳），
    * 不是 startTime！传错参数名飞策直接返回 code=-1 操作异常。

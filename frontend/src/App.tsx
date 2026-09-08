@@ -12,6 +12,7 @@ import ReminderTasksPage from '@/pages/ReminderTasksPage';
 import ReminderTaskDetailPage from '@/pages/ReminderTaskDetailPage';
 import QuickSendPage from '@/pages/QuickSendPage';
 import TransferPage from '@/pages/TransferPage';
+import PlayPage from '@/pages/PlayPage';
 import UsersPage from '@/pages/UsersPage';
 
 function RequireAuth({ children, roles }: { children: JSX.Element; roles?: string[] }) {
@@ -53,6 +54,7 @@ function App() {
         <Route path="reminders" element={<ReminderTasksPage />} />
         <Route path="reminders/:id" element={<ReminderTaskDetailPage />} />
         <Route path="quick-send" element={<QuickSendPage />} />
+        <Route path="play/:courseId" element={<PlayPage />} />
         <Route
           path="users"
           element={

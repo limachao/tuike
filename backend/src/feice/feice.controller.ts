@@ -5,6 +5,7 @@ import {
   Param,
   UseGuards,
   Query,
+  BadRequestException,
 } from '@nestjs/common';
 import { FeiceSyncService } from './feice-sync.service';
 import { FeiceInviteService } from './feice-invite.service';
@@ -138,6 +139,27 @@ export class FeiceController {
     const course = await this.prisma.course.findUniqueOrThrow({
       where: { id: Number(id) },
     });
+    // 点播视频课程（vod- 前缀）：playUrl 带签名会过期，实时获取最新地址直接返回
+    if (course.feiceLiveRoomId.startsWith('vod-')) {
+      const videoId = course.feiceLiveRoomId.slice(4);
+      const url = await this.sync.getVideoPlayUrl(videoId);
+      if (!url) {
+        throw new BadRequestException(
+          '获取点播视频播放地址失败（视频可能已被删除或不在最近 29 天内）',
+        );
+      }
+      await this.prisma.generatedLink.create({
+        data: {
+          type: 'replay',
+          liveRoomId: course.feiceLiveRoomId,
+          courseId: course.id,
+          title: course.name,
+          url,
+          createdBy: u.sub,
+        },
+      });
+      return { url };
+    }
     const r = await this.invite.buildInternalPlayUrl({
       liveRoomId: course.feiceLiveRoomId,
       userId: u.sub,

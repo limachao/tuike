@@ -45,6 +45,12 @@ export class FeiceSyncService {
         where: { id: log.id },
         data: { endedAt: new Date(), records: total, success: true },
       });
+      // 直播间同步完，顺带同步点播视频（手动生成的回放课程）；失败不影响课程同步结果
+      try {
+        await this.syncVideos(triggeredBy);
+      } catch (e: any) {
+        this.logger.warn(`点播视频同步失败: ${e?.message}`);
+      }
       return { synced: total };
     } catch (e: any) {
       await this.prisma.syncLog.update({
@@ -53,6 +59,83 @@ export class FeiceSyncService {
       });
       throw e;
     }
+  }
+
+  /** 同步点播视频（飞策后台手动生成的回放课程）→ 课程库展示 */
+  async syncVideos(triggeredBy?: number) {
+    const log = await this.prisma.syncLog.create({
+      data: { type: 'FEICE_VIDEOS', triggeredBy, triggeredSource: 'manual' },
+    });
+    let total = 0;
+    try {
+      let offset = 0;
+      let hasMore = true;
+      while (hasMore) {
+        const r = await this.api.listVideos({ offset });
+        for (const item of r.list) {
+          await this.upsertVideoCourse(item);
+          total++;
+        }
+        if (r.list.length < 20) hasMore = false;
+        else offset += 20;
+      }
+      await this.prisma.syncLog.update({
+        where: { id: log.id },
+        data: { endedAt: new Date(), records: total, success: true },
+      });
+      return { synced: total };
+    } catch (e: any) {
+      await this.prisma.syncLog.update({
+        where: { id: log.id },
+        data: { endedAt: new Date(), success: false, errorMsg: e?.message },
+      });
+      throw e;
+    }
+  }
+
+  /**
+   * 点播视频 → 课程。
+   * videoName 形如 "文职三天高分特训课-第2天_1675171_2026-08-26 19:00:16_点播视频回放"；
+   * videoType=1 为普通点播回放，videoType=2 为同一回放的"智能视频"副本（内容重复，不入库）。
+   * playUrl 带签名会过期，不落库，播放时经 getVideoPlayUrl 实时获取。
+   */
+  private async upsertVideoCourse(item: any) {
+    if (Number(item.videoType) !== 1) return;
+    if (!item.id) return;
+    const rawName = String(item.videoName ?? '').trim();
+    const name = rawName.split('_')[0]?.trim() || rawName || '未命名回放课程';
+    // 优先从名称解析开课时间（直播真实开始时间），解析不到用视频生成时间
+    const m = rawName.match(/(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})/);
+    const start =
+      (m && this.parseFeiceTime(m[1])) ??
+      this.parseFeiceTime(item.createTime) ??
+      new Date();
+    const feiceLiveRoomId = `vod-${item.id}`;
+    await this.prisma.course.upsert({
+      where: { feiceLiveRoomId },
+      create: {
+        feiceLiveRoomId,
+        name,
+        description: rawName,
+        startTime: start,
+        endTime: start,
+        status: CourseStatus.ENDED,
+        isReplayReady: true,
+        durationSource: 'feice',
+        lastSyncedAt: new Date(),
+      },
+      update: {
+        name,
+        description: rawName,
+        isReplayReady: true,
+        lastSyncedAt: new Date(),
+      },
+    });
+  }
+
+  /** 按视频 id 实时获取最新 m3u8 播放地址（供播放页使用） */
+  async getVideoPlayUrl(videoId: string) {
+    return this.api.getVideoPlayUrl(videoId);
   }
 
   /** 同步指定课程的直播观看记录 */
