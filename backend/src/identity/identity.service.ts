@@ -152,9 +152,9 @@ export class IdentityService {
         AND r."userType" = 'student'
         AND (
           (fi.uid IS NOT NULL AND r.uid = fi.uid)
-          OR (fi."thirdPartyStudentId" IS NOT NULL AND r."thirdPartyStudentId" = fi."thirdPartyStudentId")
-          OR (fi."thirdPartyTraceId" IS NOT NULL AND r."thirdPartyTraceId" = fi."thirdPartyTraceId")
-          OR (fi."unionId" IS NOT NULL AND NULLIF(r."rawData"::jsonb ->> 'unionId', '') = fi."unionId")
+          OR (fi."third_party_student_id" IS NOT NULL AND r."third_party_student_id" = fi."third_party_student_id")
+          OR (fi."third_party_trace_id" IS NOT NULL AND r."third_party_trace_id" = fi."third_party_trace_id")
+          OR (fi."unionId" IS NOT NULL AND NULLIF((CASE WHEN left(r."rawData", 1) = '{' THEN r."rawData"::jsonb END) ->> 'unionId', '') = fi."unionId")
         )
     `;
     return Number(updated);
