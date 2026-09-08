@@ -359,6 +359,7 @@ export class ReminderService {
       SELECT c.id,
              c.nickname,
              c."remarkMobiles" AS remark_mobiles,
+             c.wecom_tags AS wecom_tags,
              r."addTime" AS add_time,
              (COALESCE(s."liveSec", 0) + COALESCE(s."replaySec", 0))::int AS listen_sec
       FROM customers c
@@ -377,7 +378,22 @@ export class ReminderService {
       remarkMobiles: r.remark_mobiles,
       addTime: r.add_time,
       listenSec: Number(r.listen_sec ?? 0),
+      // 企微客户标签名数组（同步时写入，JSON 字符串）
+      wecomTags: this.parseTagArray(r.wecom_tags),
     }));
+  }
+
+  /** 解析 wecom_tags JSON 字符串为字符串数组，容错非法/空值 */
+  private parseTagArray(raw: unknown): string[] {
+    if (!raw || typeof raw !== 'string') return [];
+    try {
+      const arr = JSON.parse(raw);
+      return Array.isArray(arr)
+        ? arr.map((t) => String(t).trim()).filter(Boolean)
+        : [];
+    } catch {
+      return [];
+    }
   }
 
   /**

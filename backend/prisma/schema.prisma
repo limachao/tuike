@@ -66,6 +66,9 @@ model Customer {
   remarkMobiles       String?   @db.VarChar(500) // 逗号分隔
   // 企业标签（JSON 数组字符串）
   tags                String?   @db.Text
+  // 企微客户标签名（来自 follow_info.tags，JSON 数组字符串，如 ["意向客户","试听"]）
+  // 注意与 tags 区分：tags 存的是客户资料属性 external_attr，本字段才是企微标签
+  wecomTags           String?   @map("wecom_tags") @db.Text
   // 负责销售（可多个，存主跟进人）
   ownerUserId         Int?      @map("owner_user_id")
   owner               User?     @relation("CustomerOwner", fields: [ownerUserId], references: [id])

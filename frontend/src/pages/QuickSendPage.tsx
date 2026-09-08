@@ -6,6 +6,24 @@ import dayjs from 'dayjs';
 /** 听课时长阈值（分钟）：超过的可用一键按钮从已选中移除 */
 const LISTEN_THRESHOLD_MIN = 100;
 
+/** 听课状态分层：未听课 / 已听课（≤阈值）/ 听课充分（>阈值，不用再推） */
+type ListenStatus = 'none' | 'light' | 'heavy';
+function listenStatus(sec: number): ListenStatus {
+  if (!sec || sec <= 0) return 'none';
+  return sec > LISTEN_THRESHOLD_MIN * 60 ? 'heavy' : 'light';
+}
+const STATUS_META: Record<ListenStatus, { label: string; cls: string }> = {
+  none: { label: '未听课', cls: 'bg-white/5 text-text-tertiary border-white/10' },
+  light: { label: '已听课', cls: 'bg-emerald-500/10 text-emerald-300 border-emerald-500/30' },
+  heavy: { label: '听课充分', cls: 'bg-amber-500/10 text-accent-amber border-amber-500/30' },
+};
+const STATUS_FILTERS: Array<{ key: 'all' | ListenStatus; label: string }> = [
+  { key: 'all', label: '全部' },
+  { key: 'none', label: '未听课' },
+  { key: 'light', label: '已听课' },
+  { key: 'heavy', label: `听课≥${LISTEN_THRESHOLD_MIN}分` },
+];
+
 export default function QuickSendPage() {
   const nav = useNavigate();
   const [content, setContent] = useState('');
@@ -14,6 +32,8 @@ export default function QuickSendPage() {
   const [keyword, setKeyword] = useState('');
   const [addFrom, setAddFrom] = useState('');
   const [addTo, setAddTo] = useState('');
+  const [listenFilter, setListenFilter] = useState<'all' | ListenStatus>('all');
+  const [tagFilter, setTagFilter] = useState('');
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [sending, setSending] = useState(false);
   const [loaded, setLoaded] = useState(false);
@@ -54,7 +74,18 @@ export default function QuickSendPage() {
     else if (kind === 'gen') fillGenerated(Number(idStr));
   };
 
-  /** 本地筛选：昵称/手机号关键词 + 加入企微日期区间（数据已一次性拉到本地） */
+  /** 客户身上出现过的全部企微标签（按人数倒序），用于标签筛选下拉 */
+  const allTags = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const c of customers) {
+      for (const t of (c.wecomTags ?? []) as string[]) {
+        m.set(t, (m.get(t) ?? 0) + 1);
+      }
+    }
+    return [...m.entries()].sort((a, b) => b[1] - a[1]);
+  }, [customers]);
+
+  /** 本地筛选：昵称/手机号关键词 + 加入企微日期区间 + 听课状态 + 企微标签 */
   const filteredCustomers = useMemo(() => {
     const kw = keyword.trim().toLowerCase();
     const from = addFrom ? dayjs(addFrom).startOf('day').valueOf() : null;
@@ -71,9 +102,11 @@ export default function QuickSendPage() {
         if (from && t < from) return false;
         if (to && t > to) return false;
       }
+      if (listenFilter !== 'all' && listenStatus(c.listenSec ?? 0) !== listenFilter) return false;
+      if (tagFilter && !((c.wecomTags ?? []) as string[]).includes(tagFilter)) return false;
       return true;
     });
-  }, [customers, keyword, addFrom, addTo]);
+  }, [customers, keyword, addFrom, addTo, listenFilter, tagFilter]);
 
   /** 选中直播课程 → 填入追踪链接 + 默认文案 */
   const fillLive = (id: number) => {
@@ -257,6 +290,33 @@ export default function QuickSendPage() {
                   <button onClick={clearDateFilter} className="btn-ghost !py-1.5 !px-2 text-xs">清除</button>
                 )}
               </div>
+              {/* 听课状态分段筛选：销售快速区分该推谁、不用推谁 */}
+              <div className="flex items-center gap-1 flex-wrap">
+                {STATUS_FILTERS.map((f) => (
+                  <button
+                    key={f.key}
+                    onClick={() => setListenFilter(f.key)}
+                    className={`btn-ghost !py-1.5 !px-2.5 text-xs whitespace-nowrap ${
+                      listenFilter === f.key ? '!border-brand-500/60 !text-brand-300 bg-brand-500/10' : ''
+                    }`}
+                  >
+                    {f.label}
+                  </button>
+                ))}
+              </div>
+              {/* 企微标签筛选（客户在企微后台被打的标签） */}
+              {allTags.length > 0 && (
+                <select
+                  className="input !py-1.5 !px-2 text-xs w-36"
+                  value={tagFilter}
+                  onChange={(e) => setTagFilter(e.target.value)}
+                >
+                  <option value="">企微标签：全部</option>
+                  {allTags.map(([t, n]) => (
+                    <option key={t} value={t}>{t}（{n}人）</option>
+                  ))}
+                </select>
+              )}
               <div className="flex-1" />
               <button
                 onClick={removeHeavyListeners}
@@ -314,6 +374,30 @@ export default function QuickSendPage() {
                             {c.nickname?.slice(0, 1) ?? '·'}
                           </div>
                           <span className="font-medium truncate max-w-[220px]">{c.nickname}</span>
+                        </div>
+                        {/* 听课状态标记（系统自动）+ 企微标签（销售在企微后台打的） */}
+                        <div className="flex flex-wrap items-center gap-1 mt-1 pl-9">
+                          {(() => {
+                            const st = STATUS_META[listenStatus(c.listenSec ?? 0)];
+                            return (
+                              <span className={`inline-flex items-center px-1.5 py-0.5 rounded-md border text-[10px] leading-4 whitespace-nowrap ${st.cls}`}>
+                                {st.label}
+                              </span>
+                            );
+                          })()}
+                          {((c.wecomTags ?? []) as string[]).slice(0, 2).map((t) => (
+                            <span
+                              key={t}
+                              className="inline-flex items-center px-1.5 py-0.5 rounded-md border border-sky-500/30 bg-sky-500/10 text-sky-300 text-[10px] leading-4 whitespace-nowrap"
+                            >
+                              {t}
+                            </span>
+                          ))}
+                          {((c.wecomTags ?? []) as string[]).length > 2 && (
+                            <span className="text-[10px] text-text-tertiary">
+                              +{((c.wecomTags ?? []) as string[]).length - 2}
+                            </span>
+                          )}
                         </div>
                       </td>
                       <td className="py-2 pr-4 tabular-nums whitespace-nowrap">

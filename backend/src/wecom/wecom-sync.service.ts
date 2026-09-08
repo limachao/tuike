@@ -23,8 +23,23 @@ interface CustomerSyncRow {
   mobileEncrypted: string | null;
   wecomUnionid: string | null;
   tags: string | null;
+  wecomTags: string | null;
   addTime: Date | null;
   detail: any;
+}
+
+/**
+ * 从企微 follow_info/follow_user 中提取客户标签名。
+ * 企微返回 tags: [{group_id, tag_id, tag_name, type}]，tag_name 直接可读。
+ * 去重、去空，无标签时返回 null（不存 "[]"，便于 SQL COALESCE 判断）。
+ */
+function extractWecomTagNames(followInfo: any): string[] | null {
+  const list = Array.isArray(followInfo?.tags) ? followInfo.tags : [];
+  const names = list
+    .map((t: any) => String(t?.tag_name ?? '').trim())
+    .filter(Boolean);
+  const uniq: string[] = Array.from(new Set(names));
+  return uniq.length ? uniq : null;
 }
 
 @Injectable()
@@ -185,6 +200,8 @@ export class WecomSyncService {
     const avatar = contact.avatar ?? null;
     const gender = contact.gender ?? 0;
     const tags = JSON.stringify(contact.external_profile?.external_attr ?? []);
+    const wecomTagNames = extractWecomTagNames(followInfo);
+    const wecomTags = wecomTagNames ? JSON.stringify(wecomTagNames) : null;
     const remarkMobiles = followInfo?.remark_mobiles?.join(',') ?? null;
     // unionid：企微后台绑定微信开发者ID后 externalcontact/get 才会返回。
     // 注意企微对无 unionid 的客户可能返回空字符串 ""，而 wecom_unionid 有唯一约束，
@@ -217,6 +234,7 @@ export class WecomSyncService {
           remarkMobiles,
           wecomUnionid,
           tags,
+          wecomTags,
           ownerUserId: salesId,
           studentId,
           thirdPartyTraceId,
@@ -235,6 +253,7 @@ export class WecomSyncService {
           mobileEncrypted: mobileEncrypted ?? customer.mobileEncrypted,
           wecomUnionid: wecomUnionid ?? undefined,
           tags,
+          wecomTags,
           isDeleted: false, // 接口能返回说明好友关系仍在/已恢复
           lastSyncedAt: new Date(),
         },
@@ -282,6 +301,11 @@ export class WecomSyncService {
       // 空字符串归一为 null（wecom_unionid 有唯一约束，多个 '' 会冲突）
       wecomUnionid: contact.unionid ? contact.unionid : null,
       tags: JSON.stringify(contact.external_profile?.external_attr ?? []),
+      // 企微客户标签名（follow_info.tags 直接带 tag_name）
+      wecomTags: (() => {
+        const names = extractWecomTagNames(followInfo);
+        return names ? JSON.stringify(names) : null;
+      })(),
       addTime: followTimeRaw ? new Date(Number(followTimeRaw) * 1000) : null,
       detail,
     };
@@ -298,10 +322,10 @@ export class WecomSyncService {
         await this.prisma.$executeRaw`
           INSERT INTO customers (
             external_userid, nickname, avatar, gender, "mobileEncrypted", "remarkMobiles",
-            wecom_unionid, tags, owner_user_id, student_id, third_party_trace_id,
+            wecom_unionid, tags, wecom_tags, owner_user_id, student_id, third_party_trace_id,
             "firstAddTime", "lastSyncedAt", "updatedAt", "isDeleted"
           )
-          SELECT ext, nick, av, g, mob, rm, NULLIF(uni, '') AS uni, tg, owner, sid, tid, fat, now(), now(), false
+          SELECT ext, nick, av, g, mob, rm, NULLIF(uni, '') AS uni, tg, wtg, owner, sid, tid, fat, now(), now(), false
           FROM unnest(
             ${chunk.map((r) => r.externalUserid)}::text[],
             ${chunk.map((r) => r.nickname)}::text[],
@@ -311,11 +335,12 @@ export class WecomSyncService {
             ${chunk.map((r) => r.remarkMobiles)}::text[],
             ${chunk.map((r) => r.wecomUnionid)}::text[],
             ${chunk.map((r) => r.tags)}::text[],
+            ${chunk.map((r) => r.wecomTags)}::text[],
             ${chunk.map(() => salesId)}::int[],
             ${studentIds}::text[],
             ${traceIds}::text[],
             ${chunk.map((r) => r.addTime)}::timestamptz[]
-          ) AS t(ext, nick, av, g, mob, rm, uni, tg, owner, sid, tid, fat)
+          ) AS t(ext, nick, av, g, mob, rm, uni, tg, wtg, owner, sid, tid, fat)
           ON CONFLICT (external_userid) DO UPDATE SET
             nickname = EXCLUDED.nickname,
             avatar = EXCLUDED.avatar,
@@ -324,6 +349,7 @@ export class WecomSyncService {
             "mobileEncrypted" = COALESCE(EXCLUDED."mobileEncrypted", customers."mobileEncrypted"),
             wecom_unionid = COALESCE(EXCLUDED.wecom_unionid, customers.wecom_unionid),
             tags = EXCLUDED.tags,
+            wecom_tags = EXCLUDED.wecom_tags,
             "isDeleted" = false,
             "lastSyncedAt" = now(),
             "updatedAt" = now()
