@@ -101,13 +101,6 @@ export class WecomApiService implements OnModuleInit {
     const body: any = { userid, limit };
     if (cursor) body.cursor = cursor;
     const r = await this.requestJson<any>(url, 'POST', body);
-    // 仅首次请求（无 cursor）时打印第一个客户的原始 JSON，确认企微是否返回 unionid
-    if (!cursor && r.external_contact_list?.length) {
-      const first = r.external_contact_list[0]?.external_contact ?? {};
-      this.logger.log(
-        `[WeCom调试] 用户 ${userid} 的第一个客户 raw external_contact: ${JSON.stringify(first).slice(0, 500)}`,
-      );
-    }
     return {
       list: r.external_contact_list ?? [],
       nextCursor: r.next_cursor || undefined,
