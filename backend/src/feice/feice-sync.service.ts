@@ -248,11 +248,13 @@ export class FeiceSyncService {
     `;
   }
 
-  /** 后端启动时兜底重算一次（部署后首次访问即为汇总数据） */
+  /** 后端启动时兜底：全量身份关联 + 重算客户听课汇总（部署后首次访问即为最新数据） */
   async onModuleInit() {
-    this.recomputeListenStats()
-      .then(() => this.logger.log('[Feice] 启动时客户听课汇总重算完成'))
-      .catch((e) => this.logger.warn(`启动时汇总重算失败: ${(e as Error).message}`));
+    this.identity
+      .runFullMatch()
+      .then(() => this.recomputeListenStats())
+      .then(() => this.logger.log('[Feice] 启动时身份关联+客户听课汇总重算完成'))
+      .catch((e) => this.logger.warn(`启动时身份关联/汇总重算失败: ${(e as Error).message}`));
   }
 
   // ========= 内部方法 =========

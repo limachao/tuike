@@ -136,56 +136,45 @@ export class IdentityService {
     this.logger.warn(`FeiceIdentity#${feiceId.id} 无法匹配到任何 customer`);
   }
 
-  /** 将直播记录按 uid / thirdPartyStudentId / thirdPartyTraceId 回填 customerId */
+  /**
+   * 将直播记录批量回填 customerId（集合式 SQL）。
+   * 旧实现逐条 findFirst 且 take 2000，几十万条积压老记录会把新记录"饿死"；
+   * 这里一次性处理全部待关联记录，并增加 unionId 兜底（从 rawData JSON 提取）。
+   */
   async linkLiveRecordsToCustomer() {
-    const rows = await this.prisma.liveWatchRecord.findMany({
-      where: { customerId: null },
-      take: 2000,
-    });
-    let updated = 0;
-    for (const r of rows) {
-      const where: any = { customerId: { not: null } };
-      const OR: any[] = [];
-      if (r.thirdPartyTraceId) OR.push({ thirdPartyTraceId: r.thirdPartyTraceId });
-      if (r.thirdPartyStudentId) OR.push({ thirdPartyStudentId: r.thirdPartyStudentId });
-      if (r.uid) OR.push({ uid: r.uid });
-      if (OR.length === 0) continue;
-      where.OR = OR;
-      const ident = await this.prisma.feiceIdentity.findFirst({ where, orderBy: { matchLevel: 'asc' } });
-      if (ident) {
-        await this.prisma.liveWatchRecord.update({
-          where: { id: r.id },
-          data: { customerId: ident.customerId, feiceIdentityId: ident.id },
-        });
-        updated++;
-      }
-    }
-    return updated;
+    const updated = await this.prisma.$executeRaw`
+      UPDATE live_watch_records r
+      SET "customerId" = fi."customerId",
+          "feiceIdentityId" = fi.id
+      FROM feice_identities fi
+      WHERE r."customerId" IS NULL
+        AND fi."customerId" IS NOT NULL
+        AND r."userType" = 'student'
+        AND (
+          (fi.uid IS NOT NULL AND r.uid = fi.uid)
+          OR (fi."thirdPartyStudentId" IS NOT NULL AND r."thirdPartyStudentId" = fi."thirdPartyStudentId")
+          OR (fi."thirdPartyTraceId" IS NOT NULL AND r."thirdPartyTraceId" = fi."thirdPartyTraceId")
+          OR (fi."unionId" IS NOT NULL AND NULLIF(r."rawData"::jsonb ->> 'unionId', '') = fi."unionId")
+        )
+    `;
+    return Number(updated);
   }
 
   async linkReplayRecordsToCustomer() {
-    const rows = await this.prisma.replayWatchRecord.findMany({
-      where: { customerId: null },
-      take: 20000,
-    });
-    let updated = 0;
-    for (const r of rows) {
-      const where: any = { customerId: { not: null } };
-      const OR: any[] = [];
-      if (r.thirdPartyStudentId) OR.push({ thirdPartyStudentId: r.thirdPartyStudentId });
-      if (r.uid) OR.push({ uid: r.uid });
-      if (OR.length === 0) continue;
-      where.OR = OR;
-      const ident = await this.prisma.feiceIdentity.findFirst({ where, orderBy: { matchLevel: 'asc' } });
-      if (ident) {
-        await this.prisma.replayWatchRecord.update({
-          where: { id: r.id },
-          data: { customerId: ident.customerId, feiceIdentityId: ident.id },
-        });
-        updated++;
-      }
-    }
-    return updated;
+    const updated = await this.prisma.$executeRaw`
+      UPDATE replay_watch_records r
+      SET "customerId" = fi."customerId",
+          "feiceIdentityId" = fi.id
+      FROM feice_identities fi
+      WHERE r."customerId" IS NULL
+        AND fi."customerId" IS NOT NULL
+        AND (
+          (fi.uid IS NOT NULL AND r.uid = fi.uid)
+          OR (fi."thirdPartyStudentId" IS NOT NULL AND r."thirdPartyStudentId" = fi."thirdPartyStudentId")
+          OR (fi."unionId" IS NOT NULL AND NULLIF(r."rawData"::jsonb ->> 'unionId', '') = fi."unionId")
+        )
+    `;
+    return Number(updated);
   }
 
   /** 异常名单：customer 应听但没有确认过的 feice_identity */
