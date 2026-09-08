@@ -337,36 +337,55 @@ export class TransferService {
     if (!customer.thirdPartyTraceId) {
       throw new BadRequestException('该学生缺少追踪ID，请联系管理员');
     }
-    // 飞策邀课链接接口要求 userId/mobile 至少一个：优先取学员匹配到的飞策 uid
+    // 飞策邀课链接接口要求 userId/mobile 至少一个。
+    // 实测：传飞策学员 uid 可能报「用户不存在」，手机号路径已验证可行（内部观看同接口）。
+    // 因此依次尝试 uid → 备注手机号，全部失败时抛可读的业务错误（避免 500）。
     const identity = await this.prisma.feiceIdentity.findFirst({
       where: { customerId: customer.id, uid: { not: null } },
       orderBy: { matchLevel: 'desc' },
     });
     const firstMobile = (customer.remarkMobiles ?? '').split(',').find(Boolean);
-    const feiceUrl = await this.feice.buildEntryUrl({
-      liveRoomId: course.feiceLiveRoomId,
-      thirdPartyTraceId: customer.thirdPartyTraceId,
-      userId: identity?.uid ?? undefined,
-      mobile: identity?.uid ? undefined : firstMobile,
-    });
-    // 更新 visit
-    const now = new Date();
-    await this.prisma.transferPageVisit.updateMany({
-      where: { visitToken, jumpedToFeiceAt: null },
-      data: { jumpedToFeiceAt: now, feiceEntryUrl: feiceUrl.url },
-    });
-    // 转化追踪 - 关联到任何一个未跳转过的 recipient
-    const visit = await this.prisma.transferPageVisit.findFirst({
-      where: { visitToken },
-      select: { messageRecipientId: true },
-    });
-    if (visit?.messageRecipientId) {
-      await this.prisma.wecomGroupMessageRecipient.update({
-        where: { id: visit.messageRecipientId },
-        data: { jumpedToFeice: true, jumpedAt: now, enteredCourse: true },
-      });
+    const attempts: Array<{ userId?: string; mobile?: string }> = [];
+    if (identity?.uid) attempts.push({ userId: identity.uid });
+    if (firstMobile) attempts.push({ mobile: firstMobile });
+    if (!attempts.length) {
+      throw new BadRequestException(
+        '该学生暂无飞策身份和手机号，无法生成课程入口，请联系管理员',
+      );
     }
-    return { feiceUrl };
+    let lastErr: any = null;
+    for (const attempt of attempts) {
+      try {
+        const feiceUrl = await this.feice.buildEntryUrl({
+          liveRoomId: course.feiceLiveRoomId,
+          thirdPartyTraceId: customer.thirdPartyTraceId,
+          ...attempt,
+        });
+        // 更新 visit
+        const now = new Date();
+        await this.prisma.transferPageVisit.updateMany({
+          where: { visitToken, jumpedToFeiceAt: null },
+          data: { jumpedToFeiceAt: now, feiceEntryUrl: feiceUrl.url },
+        });
+        // 转化追踪 - 关联到任何一个未跳转过的 recipient
+        const visit = await this.prisma.transferPageVisit.findFirst({
+          where: { visitToken },
+          select: { messageRecipientId: true },
+        });
+        if (visit?.messageRecipientId) {
+          await this.prisma.wecomGroupMessageRecipient.update({
+            where: { id: visit.messageRecipientId },
+            data: { jumpedToFeice: true, jumpedAt: now, enteredCourse: true },
+          });
+        }
+        return { feiceUrl };
+      } catch (e) {
+        lastErr = e;
+      }
+    }
+    throw new BadRequestException(
+      `获取课程入口失败：${lastErr?.message ?? '未知错误'}`,
+    );
   }
 
   /** 学生在中转页取消后续提醒 */
