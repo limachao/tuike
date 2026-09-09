@@ -206,6 +206,51 @@ export class WecomApiService implements OnModuleInit {
   }
 
   /**
+   * 通过 get_groupmsg_list_v2 获取群发记录列表，查找真实 msgid。
+   *
+   * 企微坑点：add_msg_template 返回的 msgid 在发送完成后，
+   * 直接查 get_groupmsg_task 会返回 41047 invalid group msg id。
+   * 必须先从列表接口拉取，列表里的 msgid 才是查询接口认可的。
+   *
+   * @param originalMsgid add_msg_template 返回的原始 msgid
+   * @param senderWecomUserId 发送成员的企微 userid（用来过滤）
+   * @param content 发送内容（用来二次匹配）
+   */
+  async resolveActualMsgid(
+    originalMsgid: string,
+    senderWecomUserId?: string,
+    content?: string,
+  ): Promise<string | null> {
+    if (this.isMock()) return originalMsgid;
+    const token = await this.getContactAccessToken();
+    const now = Math.floor(Date.now() / 1000);
+    const start = now - 7200; // 查过去 2 小时
+    let cursor: string | undefined;
+    do {
+      const url = `${this.baseUrl}/cgi-bin/externalcontact/get_groupmsg_list_v2?access_token=${token}`;
+      const body: any = {
+        chat_type: 'single',
+        start_time: start,
+        end_time: now,
+        filter_type: 2, // 所有
+        limit: 100,
+      };
+      if (cursor) body.cursor = cursor;
+      const list = await this.requestJson<any>(url, 'POST', body);
+      for (const g of list?.group_msg_list ?? []) {
+        // 直接匹配 msgid（有时是同一个）
+        if (g.msgid === originalMsgid) return g.msgid;
+        // 用发送成员 + 内容匹配
+        const textMatch =
+          !content || (g.text?.content ?? '').includes(content.slice(0, 10));
+        if (textMatch) return g.msgid;
+      }
+      cursor = list?.next_cursor;
+    } while (cursor);
+    return null;
+  }
+
+  /**
    * 查询群发任务成员发送任务列表（哪些成员收到了群发任务、是否已发送）
    * 注意：返回字段是 task_list（不是 detail），status 数字 0=未发送 2=已发送
    */

@@ -110,20 +110,50 @@ export class WecomGroupMessageService {
     });
     if (!task.wecomMsgid) return { ok: false, msg: '未提交企业微信' };
 
-    // === 1. 获取成员发送任务列表 ===
+    // === 1. 确定查询用的 msgid ===
+    // 直接用 add_msg_template 返回的 msgid 查可能返回 41047，
+    // 需要先尝试，失败了就通过 get_groupmsg_list_v2 回查真实 msgid
+    let resolvedMsgid = task.wecomMsgid;
     let memberTasks: Array<{ userid: string; status: number }> = [];
     let confirmedCount = 0;
     try {
-      const r: any = await this.api.queryGroupMessageSendStatus(task.wecomMsgid);
+      const r: any = await this.api.queryGroupMessageSendStatus(resolvedMsgid);
       memberTasks = r?.task_list ?? [];
-      // task_list 里 status >= 2 表示已发送
-      confirmedCount = memberTasks.filter((m) => Number(m.status) >= 2).length;
-      this.logger.log(
-        `[refreshTaskStatus] msgid=${task.wecomMsgid} 成员任务数=${memberTasks.length} 已确认=${confirmedCount}`,
-      );
-    } catch (e) {
-      this.logger.warn(`查询成员执行状态失败: ${(e as Error).message}`);
+    } catch (e: any) {
+      // 41047 = invalid group msg id，需要回查真实 msgid
+      if (e?.message?.includes('41047')) {
+        this.logger.log(
+          `[refreshTaskStatus] msgid=${resolvedMsgid} 被拒(41047)，尝试通过列表接口回查真实 msgid...`,
+        );
+        const actual = await this.api.resolveActualMsgid(
+          resolvedMsgid,
+          task.createdBy?.wecomUserId ?? undefined,
+          task.finalContent ?? undefined,
+        );
+        if (actual && actual !== resolvedMsgid) {
+          this.logger.log(`[refreshTaskStatus] 找到真实 msgid=${actual}`);
+          resolvedMsgid = actual;
+          // 顺便存回 DB，下次直接用
+          await this.prisma.wecomGroupMessageTask.update({
+            where: { id: taskId },
+            data: { wecomMsgid: actual },
+          });
+          const r2: any = await this.api.queryGroupMessageSendStatus(resolvedMsgid);
+          memberTasks = r2?.task_list ?? [];
+        } else if (actual === resolvedMsgid) {
+          // 同一个 msgid，可能企微就是不认，放弃
+          this.logger.warn(
+            `[refreshTaskStatus] 列表里找不到对应记录，msgid=${resolvedMsgid}`,
+          );
+        }
+      } else {
+        this.logger.warn(`查询成员执行状态失败: ${(e as Error).message}`);
+      }
     }
+    confirmedCount = memberTasks.filter((m) => Number(m.status) >= 2).length;
+    this.logger.log(
+      `[refreshTaskStatus] msgid=${resolvedMsgid} 成员任务数=${memberTasks.length} 已确认=${confirmedCount}`,
+    );
 
     // === 2. 逐个成员查询客户级发送结果 ===
     // 企微 get_groupmsg_send_result **必须传 userid**，且只返回该成员的发送记录
@@ -136,7 +166,7 @@ export class WecomGroupMessageService {
       do {
         try {
           const r: any = await this.api.queryGroupMessageCustomerResult(
-            task.wecomMsgid,
+            resolvedMsgid,
             member.userid,
             500,
             cursor,
