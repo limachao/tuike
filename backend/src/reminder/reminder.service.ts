@@ -429,6 +429,26 @@ export class ReminderService {
     if (!customerIds?.length) throw new BadRequestException('请至少选择一位客户');
     if (customerIds.length > 10000) throw new BadRequestException('单次最多 10000 人');
 
+    // 文案字节校验：企微 text.content 最多 4000 字节（UTF-8，中文 1 字 ≈ 3 字节）
+    const contentBytes = Buffer.byteLength(content.trim(), 'utf8');
+    if (contentBytes > 4000) {
+      throw new BadRequestException(
+        `文案太长（${contentBytes} 字节），企业微信限制最多 4000 字节（约 1300 汉字）`,
+      );
+    }
+    // 链接字节校验：企微 link.url 最多 2048 字节
+    if (url && Buffer.byteLength(url, 'utf8') > 2048) {
+      throw new BadRequestException(`链接太长，企业微信限制最多 2048 字节`);
+    }
+
+    // 防重复提交锁：同一销售 10 秒内只能提交一次
+    const dedupKey = `quick-send:${params.operatorId}:${Date.now().toString().slice(0, -1)}`; // 10 秒粒度
+    const acquired = await this.redis.safeGet(dedupKey);
+    if (acquired) {
+      throw new BadRequestException('正在提交中，请勿重复点击');
+    }
+    await this.redis.safeSet(dedupKey, '1', 15); // 15 秒 TTL
+
     // 查客户（只取属于该销售名下的有效客户）
     const customers = await this.prisma.customer.findMany({
       where: {
@@ -498,6 +518,7 @@ export class ReminderService {
         customerId: c.id,
         externalUserid: c.externalUserid!,
       })),
+      skipDuplicates: true,
     });
 
     await this.audit.log({

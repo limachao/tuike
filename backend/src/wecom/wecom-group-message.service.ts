@@ -103,12 +103,25 @@ export class WecomGroupMessageService {
    *      返回 send_list, status: 0=未发送 1=已发送 2=非好友 3=超限
    *   3. 汇总所有 send_list
    */
+  /** 正在刷新的任务集合（进程内去重，30 秒后自动清理） */
+  private readonly refreshing = new Set<number>();
+
   async refreshTaskStatus(taskId: number) {
-    const task = await this.prisma.wecomGroupMessageTask.findUniqueOrThrow({
-      where: { id: taskId },
-      include: { recipients: true, createdBy: true },
-    });
-    if (!task.wecomMsgid) return { ok: false, msg: '未提交企业微信' };
+    // 防止同一个任务并发刷新（销售狂点 / 多人同时操作）
+    if (this.refreshing.has(taskId)) {
+      this.logger.warn(`[refreshTaskStatus] taskId=${taskId} 正在刷新中，本次跳过`);
+      return { ok: false, msg: '正在刷新中，稍后再试' };
+    }
+    this.refreshing.add(taskId);
+
+    try {
+      const task = await this.prisma.wecomGroupMessageTask.findUniqueOrThrow({
+        where: { id: taskId },
+        include: { recipients: true, createdBy: true },
+      });
+      if (!task.wecomMsgid) {
+        return { ok: false, msg: '未提交企业微信' };
+      }
 
     // === 1. 确定查询用的 msgid ===
     // 直接用 add_msg_template 返回的 msgid 查可能返回 41047，
@@ -212,28 +225,33 @@ export class WecomGroupMessageService {
       }
     }
 
-    // === 4. 更新 recipient 级状态 ===
+    // === 4. 更新 recipient 级状态（用 updateMany 批量，6000 人只需 2-3 次 SQL）===
+    // 按 externalUserid 分组：fail 的一组 + success 的一组 + failReason 不同的一组
+    const successIds: string[] = [];
+    const failByReason = new Map<string, string[]>(); // reason -> [externalUserids]
     for (const rec of task.recipients) {
-      const failReason = failMap.get(rec.externalUserid);
-      if (failReason) {
-        await this.prisma.wecomGroupMessageRecipient.update({
-          where: { id: rec.id },
-          data: {
-            wecomSendStatus: 'fail',
-            customerReceived: false,
-            wecomFailReason: failReason,
-          },
-        });
-      } else if (sentSuccess > 0 && !failReason) {
-        // 不在 failMap 里 + 有成功记录 → 保守标记为已发送
-        await this.prisma.wecomGroupMessageRecipient.update({
-          where: { id: rec.id },
-          data: {
-            wecomSendStatus: 'success',
-            customerReceived: true,
-          },
-        });
+      const reason = failMap.get(rec.externalUserid);
+      if (reason) {
+        const list = failByReason.get(reason) ?? [];
+        list.push(rec.externalUserid);
+        failByReason.set(reason, list);
+      } else if (sentSuccess > 0) {
+        successIds.push(rec.externalUserid);
       }
+    }
+    // 批量更新失败组（每个 failReason 一条 updateMany）
+    for (const [reason, ids] of failByReason) {
+      await this.prisma.wecomGroupMessageRecipient.updateMany({
+        where: { messageTaskId: taskId, externalUserid: { in: ids } },
+        data: { wecomSendStatus: 'fail', customerReceived: false, wecomFailReason: reason },
+      });
+    }
+    // 批量更新成功组
+    if (successIds.length > 0) {
+      await this.prisma.wecomGroupMessageRecipient.updateMany({
+        where: { messageTaskId: taskId, externalUserid: { in: successIds } },
+        data: { wecomSendStatus: 'success', customerReceived: true },
+      });
     }
 
     await this.prisma.wecomGroupMessageTask.update({
@@ -247,6 +265,9 @@ export class WecomGroupMessageService {
       },
     });
     return { ok: true, status, sentSuccess, sentFail, confirmedCount };
+    } finally {
+      this.refreshing.delete(taskId);
+    }
   }
 
   /** 停止未完成的群发任务（仅能停止整体，不能删单个人） */
