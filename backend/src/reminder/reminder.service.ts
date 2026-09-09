@@ -14,7 +14,6 @@ import { RedisService } from '../common/redis/redis.service';
 import { AttendanceService } from '../attendance/attendance.service';
 import { WecomGroupMessageService } from '../wecom/wecom-group-message.service';
 import { AuditLogService } from '../audit/audit-log.service';
-import { v4 as uuidv4 } from 'uuid';
 import { ReminderRuleService } from './reminder-rule.service';
 
 /**
@@ -487,6 +486,7 @@ export class ReminderService {
         content.trim(),
         url,
         validCustomers.map((c) => c.externalUserid!),
+        linkTitle,
       );
     } catch (e: any) {
       throw new BadRequestException(`企微创建群发任务失败: ${e.message ?? e}`);
@@ -537,13 +537,6 @@ export class ReminderService {
     return this.prisma.messageTemplate.findFirst({
       where: { type, isDefault: true, isActive: true },
       orderBy: { version: 'desc' },
-    });
-  }
-
-  async listTemplates() {
-    return this.prisma.messageTemplate.findMany({
-      where: { isActive: true },
-      orderBy: [{ type: 'asc' }, { version: 'desc' }],
     });
   }
 

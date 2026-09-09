@@ -148,7 +148,7 @@ export class WecomApiService implements OnModuleInit {
   }
 
   /** 获取单个客户详情（含添加方式等） */
-  async getCustomerDetail(externalUserid: string, cursor?: string) {
+  async getCustomerDetail(externalUserid: string) {
     if (this.isMock()) return null;
     const token = await this.getContactAccessToken();
     const url = `${this.baseUrl}/cgi-bin/externalcontact/get?access_token=${token}&external_userid=${encodeURIComponent(

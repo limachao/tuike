@@ -116,6 +116,7 @@ model CustomerSalesRelation {
 
   @@unique([customerId, salesUserId])
   @@index([salesUserId])
+  @@index([salesUserId, status]) // quickSendCustomers 高频查询
   @@map("customer_sales_relations")
 }
 

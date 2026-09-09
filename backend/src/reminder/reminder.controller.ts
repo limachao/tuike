@@ -20,12 +20,6 @@ import { MessageTemplateType, GroupMessageStatus } from '@prisma/client';
 export class ReminderController {
   constructor(private readonly reminder: ReminderService) {}
 
-  // ============ 模板 ============
-  @Get('templates')
-  listTemplates() {
-    return this.reminder.listTemplates();
-  }
-
   // ============ 预览 + 创建 ============
   @Post('preview')
   preview(
