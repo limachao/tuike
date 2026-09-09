@@ -133,6 +133,7 @@ export class WecomSyncService {
         '客户同步正在进行中，请 5 分钟后再试（系统自动每 30 分钟同步一次）',
       );
     }
+    try {
     // 兜底：如果调用方没传标签库，这里拉一次
     let tm: Map<string, { name: string; group: string }> | null = tagMap ?? null;
     if (!tm) {
@@ -200,6 +201,10 @@ export class WecomSyncService {
         data: { endedAt: new Date(), success: false, errorMsg: e?.message },
       });
       throw e;
+    }
+    } finally {
+      // 无论成功还是失败都释放锁（兜底：TPL 300s 超时也会自动释放）
+      await this.redis.delLock(lockKey);
     }
   }
 

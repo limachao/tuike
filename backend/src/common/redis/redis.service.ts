@@ -59,15 +59,9 @@ export class RedisService implements OnModuleDestroy {
   }
 
   /**
-   * 分布式锁: 成功返回 true, 已被占用返回 false
+   * 分布式锁: SET NX EX, 成功返回 true, 已被占用返回 false
    */
   async tryLock(key: string, ttlSec = 30): Promise<boolean> {
-    const result = await this.safeSet(
-      `lock:${key}`,
-      String(Date.now()),
-      ttlSec,
-    );
-    // SET with NX via ioredis: we use SET key value EX ttl NX
     try {
       const r = await this.client.set(
         `lock:${key}`,
@@ -78,7 +72,16 @@ export class RedisService implements OnModuleDestroy {
       );
       return r === 'OK';
     } catch (e) {
-      return result;
+      return false;
+    }
+  }
+
+  /** 释放分布式锁（无论是否持有都尝试删除，简单安全） */
+  async delLock(key: string): Promise<void> {
+    try {
+      await this.client.del(`lock:${key}`);
+    } catch {
+      // Redis 挂了就算了，等 TTL 自然过期
     }
   }
 
