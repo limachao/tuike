@@ -9,7 +9,6 @@ export default function CustomersPage() {
   const [keyword, setKeyword] = useState('');
   const [listenFilter, setListenFilter] = useState<ListenFilter>('all');
   const [syncing, setSyncing] = useState(false);
-  const [syncCooldown, setSyncCooldown] = useState(0);
   const [loaded, setLoaded] = useState(false);
   /** 分批渲染：先画 200 行，滚动到底部每次追加 300 行 */
   const [visibleCount, setVisibleCount] = useState(200);
@@ -29,11 +28,10 @@ export default function CustomersPage() {
   useEffect(() => { load(); }, []);
 
   const syncCustomers = async () => {
-    if (syncing || syncCooldown > 0) return;
+    if (syncing) return;
     setSyncing(true);
     try {
       await api.post('/wecom/sync/my-customers');
-      setSyncCooldown(60); // 成功后 60 秒冷却
       alert('已开始从企业微信获取你的客户（学员较多时约需几分钟），稍后刷新本页查看。');
     } catch (e: any) {
       alert(e?.response?.data?.message ?? '获取客户信息失败');
@@ -41,13 +39,6 @@ export default function CustomersPage() {
       setSyncing(false);
     }
   };
-
-  // 冷却倒计时
-  useEffect(() => {
-    if (syncCooldown <= 0) return;
-    const t = setInterval(() => setSyncCooldown((c) => Math.max(0, c - 1)), 1000);
-    return () => clearInterval(t);
-  }, [syncCooldown]);
 
   const listened = useMemo(() => customers.filter((c) => (c.listenSec ?? 0) > 0), [customers]);
 
@@ -86,12 +77,8 @@ export default function CustomersPage() {
             你企业微信名下的所有客户 · 是否听过飞策课程 · 加入企微时间
           </div>
         </div>
-        <button onClick={syncCustomers} disabled={syncing || syncCooldown > 0} className="btn-ghost">
-          {syncing
-            ? '↻ 获取中…'
-            : syncCooldown > 0
-              ? `⏳ 冷却 ${syncCooldown}s`
-              : '👤 获取我的客户信息'}
+        <button onClick={syncCustomers} disabled={syncing} className="btn-ghost">
+          {syncing ? '⏳ 加载中…' : '👤 获取我的客户信息'}
         </button>
       </div>
 
