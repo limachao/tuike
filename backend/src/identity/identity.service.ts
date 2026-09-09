@@ -37,13 +37,14 @@ export class IdentityService {
     const matchedIdentities = await this.matchIdentitiesToCustomers();
     const linkedLive = await this.linkLiveRecordsToCustomer();
     const linkedReplay = await this.linkReplayRecordsToCustomer();
-    // 弱匹配兜底：强标识（unionId/手机号/uid 等）全断后，
-    // 按「同一课程名单内昵称唯一」自动关联——销售零操作；有重名歧义则留空不猜。
-    const linkedLiveByName = await this.linkLiveRecordsByNameInRoster();
-    const linkedReplayByName = await this.linkReplayRecordsByNameInRoster();
+    // 弱匹配兜底：强标识（unionId/手机号/uid 等）全断后，用「微信昵称」关联。
+    // 双保险——飞策侧该昵称仅 1 个 uid（同一人）且客户表仅 1 个同名客户才自动关联，
+    // 任何一边重名/无昵称/客户不存在一律留空不猜。销售零操作。
+    const linkedLiveByName = await this.linkLiveRecordsByNameUnique();
+    const linkedReplayByName = await this.linkReplayRecordsByNameUnique();
     if (linkedLiveByName + linkedReplayByName > 0) {
       this.logger.log(
-        `[Identity] 名单内昵称唯一弱匹配：直播 ${linkedLiveByName} 条、回放 ${linkedReplayByName} 条`,
+        `[Identity] 昵称唯一弱匹配：直播 ${linkedLiveByName} 条、回放 ${linkedReplayByName} 条`,
       );
     }
     return {
@@ -193,81 +194,82 @@ export class IdentityService {
   }
 
   /**
-   * 弱匹配（直播）：强标识全断的记录，用「飞策昵称 ↔ 客户微信名」兜底。
-   * 安全边界——必须同时满足：
-   *   1) 该记录所属课程的邀请名单（course_rosters，经 course_monitoring_tasks 关联）内；
-   *   2) 名单里昵称（去空格、忽略大小写）与飞策 nickName 完全一致的客户「恰好 1 个」。
-   * 有重名 / 不在名单 / 无昵称 → 不更新（customerId 保持 NULL，绝不张冠李戴）。
-   * 弱匹配只回填记录的 customerId，不写 feiceIdentityId，便于与强匹配区分。
+   * 弱匹配（直播）：强标识全断的记录，用「微信昵称」兜底。
+   * 飞策 nickName 与企微客户 nickname 同源（都是微信昵称）。
+   * 双保险，必须同时满足才关联：
+   *   1) 飞策侧：该昵称（去空格/忽略大小写）在未匹配记录中只对应 1 个 uid（同一个人）；
+   *   2) 客户侧：客户表中该昵称只对应 1 个未删除客户。
+   * 任一边重名 / 无昵称 / 无 uid → 不更新（customerId 保持 NULL，绝不张冠李戴）。
+   * 弱匹配只回填记录 customerId，不写 feiceIdentityId（与强匹配区分，便于回滚）。
    */
-  async linkLiveRecordsByNameInRoster() {
+  async linkLiveRecordsByNameUnique() {
     const updated = await this.prisma.$executeRaw`
-      WITH nick AS (
-        SELECT r.id AS rec_id,
-               r."courseId" AS course_id,
-               LOWER(BTRIM(CASE WHEN left(r."rawData", 1) = '{'
-                                THEN r."rawData"::jsonb ->> 'nickName' END)) AS nn
+      WITH rec AS (
+        SELECT r.id AS rec_id, r.uid,
+               LOWER(BTRIM(r."rawData"::jsonb ->> 'nickName')) AS nn
         FROM live_watch_records r
         WHERE r."customerId" IS NULL
           AND r."userType" = 'student'
+          AND left(r."rawData", 1) = '{'
+          AND NULLIF(BTRIM(r."rawData"::jsonb ->> 'nickName'), '') IS NOT NULL
+          AND NULLIF(BTRIM(r.uid), '') IS NOT NULL
       ),
-      cand AS (
-        SELECT n.rec_id, c.id AS cid
-        FROM nick n
-        JOIN course_monitoring_tasks t ON t."courseId" = n.course_id
-        JOIN course_rosters cr
-          ON cr."taskId" = t.id AND cr."isExcluded" = false
-        JOIN customers c
-          ON c.id = cr."customerId" AND c."isDeleted" = false
-        WHERE n.nn IS NOT NULL AND n.nn <> ''
-          AND LOWER(BTRIM(c.nickname)) = n.nn
+      feice_uniq AS (
+        -- 飞策侧：每个昵称仅 1 个 uid
+        SELECT nn, MIN(uid) AS uid
+        FROM rec
+        GROUP BY nn
+        HAVING COUNT(DISTINCT uid) = 1
       ),
-      uniq AS (
-        SELECT rec_id, MIN(cid) AS cid
-        FROM cand
-        GROUP BY rec_id
-        HAVING COUNT(DISTINCT cid) = 1
+      cust_uniq AS (
+        -- 客户侧：每个昵称仅 1 个未删除客户
+        SELECT LOWER(BTRIM(nickname)) AS nn, MIN(id) AS cid
+        FROM customers
+        WHERE "isDeleted" = false AND NULLIF(BTRIM(nickname), '') IS NOT NULL
+        GROUP BY LOWER(BTRIM(nickname))
+        HAVING COUNT(DISTINCT id) = 1
       )
       UPDATE live_watch_records r
-      SET "customerId" = u.cid
-      FROM uniq u
-      WHERE r.id = u.rec_id AND r."customerId" IS NULL
+      SET "customerId" = cu.cid
+      FROM rec
+      JOIN feice_uniq fu ON fu.nn = rec.nn AND fu.uid = rec.uid
+      JOIN cust_uniq cu ON cu.nn = rec.nn
+      WHERE r.id = rec.rec_id AND r."customerId" IS NULL
     `;
     return Number(updated);
   }
 
-  /** 弱匹配（回放）：逻辑同直播，回放表无 userType 字段故不加该过滤。 */
-  async linkReplayRecordsByNameInRoster() {
+  /** 弱匹配（回放）：逻辑同直播；回放表无 userType 字段故不加该过滤。 */
+  async linkReplayRecordsByNameUnique() {
     const updated = await this.prisma.$executeRaw`
-      WITH nick AS (
-        SELECT r.id AS rec_id,
-               r."courseId" AS course_id,
-               LOWER(BTRIM(CASE WHEN left(r."rawData", 1) = '{'
-                                THEN r."rawData"::jsonb ->> 'nickName' END)) AS nn
+      WITH rec AS (
+        SELECT r.id AS rec_id, r.uid,
+               LOWER(BTRIM(r."rawData"::jsonb ->> 'nickName')) AS nn
         FROM replay_watch_records r
         WHERE r."customerId" IS NULL
+          AND left(r."rawData", 1) = '{'
+          AND NULLIF(BTRIM(r."rawData"::jsonb ->> 'nickName'), '') IS NOT NULL
+          AND NULLIF(BTRIM(r.uid), '') IS NOT NULL
       ),
-      cand AS (
-        SELECT n.rec_id, c.id AS cid
-        FROM nick n
-        JOIN course_monitoring_tasks t ON t."courseId" = n.course_id
-        JOIN course_rosters cr
-          ON cr."taskId" = t.id AND cr."isExcluded" = false
-        JOIN customers c
-          ON c.id = cr."customerId" AND c."isDeleted" = false
-        WHERE n.nn IS NOT NULL AND n.nn <> ''
-          AND LOWER(BTRIM(c.nickname)) = n.nn
+      feice_uniq AS (
+        SELECT nn, MIN(uid) AS uid
+        FROM rec
+        GROUP BY nn
+        HAVING COUNT(DISTINCT uid) = 1
       ),
-      uniq AS (
-        SELECT rec_id, MIN(cid) AS cid
-        FROM cand
-        GROUP BY rec_id
-        HAVING COUNT(DISTINCT cid) = 1
+      cust_uniq AS (
+        SELECT LOWER(BTRIM(nickname)) AS nn, MIN(id) AS cid
+        FROM customers
+        WHERE "isDeleted" = false AND NULLIF(BTRIM(nickname), '') IS NOT NULL
+        GROUP BY LOWER(BTRIM(nickname))
+        HAVING COUNT(DISTINCT id) = 1
       )
       UPDATE replay_watch_records r
-      SET "customerId" = u.cid
-      FROM uniq u
-      WHERE r.id = u.rec_id AND r."customerId" IS NULL
+      SET "customerId" = cu.cid
+      FROM rec
+      JOIN feice_uniq fu ON fu.nn = rec.nn AND fu.uid = rec.uid
+      JOIN cust_uniq cu ON cu.nn = rec.nn
+      WHERE r.id = rec.rec_id AND r."customerId" IS NULL
     `;
     return Number(updated);
   }
