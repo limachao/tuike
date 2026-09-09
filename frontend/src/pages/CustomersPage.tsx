@@ -32,9 +32,8 @@ export default function CustomersPage() {
     setSyncing(true);
     try {
       await api.post('/wecom/sync/my-customers');
-      alert('已开始从企业微信获取你的客户（学员较多时约需几分钟），稍后刷新本页查看。');
-    } catch (e: any) {
-      alert(e?.response?.data?.message ?? '获取客户信息失败');
+    } catch (e) {
+      // 静默失败：按钮会从"加载中"恢复正常，用户可再次点击
     } finally {
       setSyncing(false);
     }
