@@ -419,13 +419,13 @@ export class ReminderService {
   async quickSend(params: {
     operatorId: number;
     content: string;
-    url: string;
+    url?: string;
     customerIds: number[];
     linkTitle?: string;
   }) {
-    const { content, url, customerIds, linkTitle = '点击进入' } = params;
+    const { content, customerIds, linkTitle = '点击进入' } = params;
+    const url = params.url?.trim() ?? '';
     if (!content?.trim()) throw new BadRequestException('文案不能为空');
-    if (!url?.trim()) throw new BadRequestException('网址不能为空');
     if (!customerIds?.length) throw new BadRequestException('请至少选择一位客户');
     if (customerIds.length > 10000) throw new BadRequestException('单次最多 10000 人');
 
@@ -449,7 +449,7 @@ export class ReminderService {
       wecomResult = await this.wecomGroup.submitToWecomDraft(
         params.operatorId,
         content.trim(),
-        url.trim(),
+        url,
         customers.map((c) => c.externalUserid),
       );
     } catch (e: any) {
@@ -465,7 +465,7 @@ export class ReminderService {
         createdBySalesId: params.operatorId,
         templateType: MessageTemplateType.CUSTOM,
         finalContent: content.trim(),
-        finalUrl: url.trim(),
+        finalUrl: url,
         entryType: 'live',
         status: GroupMessageStatus.PENDING_CONFIRM,
         wecomMsgid: wecomResult.msgid,

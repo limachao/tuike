@@ -78,7 +78,7 @@ export class ReminderController {
     @Body()
     body: {
       content: string;
-      url: string;
+      url?: string;
       customerIds: number[];
       linkTitle?: string;
     },

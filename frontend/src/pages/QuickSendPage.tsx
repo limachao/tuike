@@ -156,16 +156,16 @@ export default function QuickSendPage() {
 
   const clearDateFilter = () => { setAddFrom(''); setAddTo(''); };
 
-  const send = async () => {
+  const send = async (withUrl: boolean) => {
     if (!content.trim()) { alert('请输入文案'); return; }
-    if (!url.trim()) { alert('请输入网址'); return; }
+    if (withUrl && !url.trim()) { alert('请输入网址'); return; }
     if (selected.size === 0) { alert('请至少选择一位客户'); return; }
     if (!confirm(`确定发送给 ${selected.size} 位客户吗？\n\n销售需要在企业微信手机端确认后，客户才会收到消息。`)) return;
     setSending(true);
     try {
       const { data } = await api.post('/reminder/quick-send', {
         content: content.trim(),
-        url: url.trim(),
+        url: withUrl ? url.trim() : '',
         customerIds: [...selected],
       });
       alert(`已创建群发任务 #${data.messageTask.id}！\n请到企业微信手机端确认发送。`);
@@ -201,7 +201,7 @@ export default function QuickSendPage() {
         <div className="text-[11px] text-text-tertiary uppercase tracking-widest">Quick Send</div>
         <h1 className="text-2xl font-semibold tracking-tight">快捷群发</h1>
         <div className="text-sm text-text-secondary mt-1">
-          写文案 + 粘贴网址 → 按加入日期/听课情况筛选客户 → 发送 → 企业微信手机端确认
+          写文案（网址可选）→ 按加入日期/听课情况筛选客户 → 发送 → 企业微信手机端确认
         </div>
       </div>
 
@@ -255,10 +255,10 @@ export default function QuickSendPage() {
               <div className="text-[11px] text-text-tertiary mt-1">{content.length} 字</div>
             </div>
             <div>
-              <label className="label">附带网址（链接标题默认「点击进入」）</label>
+              <label className="label">附带网址（选填，仅「文案+网址」需要；链接标题默认「点击进入」）</label>
               <input
                 className="input"
-                placeholder="https://…"
+                placeholder="https://…（只发文案可留空）"
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}
               />
@@ -471,13 +471,24 @@ export default function QuickSendPage() {
               </ul>
             </div>
 
-            <button
-              onClick={send}
-              disabled={sending}
-              className="btn-primary w-full"
-            >
-              {sending ? '正在提交…' : `✉ 发送给 ${selected.size} 位客户`}
-            </button>
+            <div className="space-y-2">
+              <button
+                onClick={() => send(false)}
+                disabled={sending || !content.trim() || selected.size === 0}
+                className="btn-primary w-full"
+                title={!content.trim() ? '请先输入文案' : selected.size === 0 ? '请先选择客户' : ''}
+              >
+                {sending ? '正在提交…' : `✉ 只发文案（${selected.size} 位客户）`}
+              </button>
+              <button
+                onClick={() => send(true)}
+                disabled={sending || !content.trim() || !url.trim() || selected.size === 0}
+                className="btn-ghost w-full"
+                title={!url.trim() ? '请先在下方输入网址' : !content.trim() ? '请先输入文案' : selected.size === 0 ? '请先选择客户' : ''}
+              >
+                {sending ? '正在提交…' : `🔗 文案 + 网址（${selected.size} 位客户）`}
+              </button>
+            </div>
           </div>
         </div>
       </div>
