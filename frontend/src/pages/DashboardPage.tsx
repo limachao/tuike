@@ -93,7 +93,7 @@ export default function DashboardPage() {
           <button onClick={sync} disabled={syncing} className="btn-ghost">
             {syncing ? '⏳ 加载中…' : '👤 获取我的客户信息'}
           </button>
-          <Link to="/quick-send" className="btn-primary">＋ 创建监控任务</Link>
+          <Link to="/quick-send" className="btn-primary">⚡ 快捷群发</Link>
         </div>
       </div>
 
