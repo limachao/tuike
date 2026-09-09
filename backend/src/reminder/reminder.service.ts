@@ -440,6 +440,22 @@ export class ReminderService {
     });
     if (customers.length === 0) throw new BadRequestException('选中的客户均不在你名下');
 
+    // 过滤掉没有企微 externalUserid 的客户（企微 API 不认，会整体报错）
+    const validCustomers = customers.filter(
+      (c) => c.externalUserid && c.externalUserid.trim().length > 0,
+    );
+    const skipped = customers.length - validCustomers.length;
+    if (validCustomers.length === 0) {
+      throw new BadRequestException(
+        `选中的 ${customers.length} 位客户都还未绑定企业微信，无法发送。请先同步客户信息。`,
+      );
+    }
+    if (skipped > 0) {
+      this.logger.warn(
+        `快捷群发跳过 ${skipped} 位未绑定企微的客户（总共选了 ${customers.length} 位）`,
+      );
+    }
+
     const taskNo = `QS${Date.now()}${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
 
     // 先调企微 API（同步创建任务，通常 2-5 秒返回 msgid）。
@@ -450,7 +466,7 @@ export class ReminderService {
         params.operatorId,
         content.trim(),
         url,
-        customers.map((c) => c.externalUserid),
+        validCustomers.map((c) => c.externalUserid!),
       );
     } catch (e: any) {
       throw new BadRequestException(`企微创建群发任务失败: ${e.message ?? e}`);
@@ -470,17 +486,17 @@ export class ReminderService {
         status: GroupMessageStatus.PENDING_CONFIRM,
         wecomMsgid: wecomResult.msgid,
         wecomCreatedAt: new Date(),
-        totalRecipients: customers.length,
+        totalRecipients: validCustomers.length,
         failList: wecomResult.failList ? JSON.stringify(wecomResult.failList) : undefined,
         sentFailCount: wecomResult.failList?.length ?? 0,
       },
     });
 
     await this.prisma.wecomGroupMessageRecipient.createMany({
-      data: customers.map((c) => ({
+      data: validCustomers.map((c) => ({
         messageTaskId: groupTask.id,
         customerId: c.id,
-        externalUserid: c.externalUserid,
+        externalUserid: c.externalUserid!,
       })),
     });
 

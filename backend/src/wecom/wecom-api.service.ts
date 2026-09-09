@@ -224,7 +224,8 @@ export class WecomApiService implements OnModuleInit {
     if (this.isMock()) return originalMsgid;
     const token = await this.getContactAccessToken();
     const now = Math.floor(Date.now() / 1000);
-    const start = now - 7200; // 查过去 2 小时
+    // 先查近 10 分钟（刚提交的群发应该在这个窗口里）
+    const start = now - 600;
     let cursor: string | undefined;
     do {
       const url = `${this.baseUrl}/cgi-bin/externalcontact/get_groupmsg_list_v2?access_token=${token}`;
@@ -232,21 +233,37 @@ export class WecomApiService implements OnModuleInit {
         chat_type: 'single',
         start_time: start,
         end_time: now,
-        filter_type: 2, // 所有
+        filter_type: 0, // 0=只查企业发表（API 创建的），避免混到个人发表
         limit: 100,
       };
       if (cursor) body.cursor = cursor;
       const list = await this.requestJson<any>(url, 'POST', body);
-      for (const g of list?.group_msg_list ?? []) {
-        // 直接匹配 msgid（有时是同一个）
-        if (g.msgid === originalMsgid) return g.msgid;
-        // 用发送成员 + 内容匹配
-        const textMatch =
-          !content || (g.text?.content ?? '').includes(content.slice(0, 10));
-        if (textMatch) return g.msgid;
+      const groups = list?.group_msg_list ?? [];
+      // 精确 msgid 匹配（最优先）
+      for (const g of groups) {
+        if (g.msgid === originalMsgid) {
+          this.logger.log(
+            `[resolveActualMsgid] 精确匹配 msgid=${originalMsgid}`,
+          );
+          return g.msgid;
+        }
+      }
+      // 再试内容精确匹配（用完整 content，而不是前 10 字）
+      if (content) {
+        for (const g of groups) {
+          if ((g.text?.content ?? '') === content.trim()) {
+            this.logger.log(
+              `[resolveActualMsgid] 内容精确匹配 msgid=${g.msgid}（原 msgid=${originalMsgid}）`,
+            );
+            return g.msgid;
+          }
+        }
       }
       cursor = list?.next_cursor;
     } while (cursor);
+    this.logger.warn(
+      `[resolveActualMsgid] 未能在列表中找到 msgid=${originalMsgid} 的群发记录`,
+    );
     return null;
   }
 
