@@ -93,59 +93,85 @@ export class WecomGroupMessageService {
     return { msgid, failList };
   }
 
-  /** 查询并更新状态（成员执行情况 + 客户级结果） */
+  /**
+   * 查询并更新状态（成员执行情况 + 客户级结果）
+   *
+   * 正确流程：
+   *   1. get_groupmsg_task(msgid) → 成员任务列表 task_list
+   *      status: 0=未发送 2=已发送
+   *   2. 对每个已发送成员逐个调 get_groupmsg_send_result(msgid, userid)
+   *      返回 send_list, status: 0=未发送 1=已发送 2=非好友 3=超限
+   *   3. 汇总所有 send_list
+   */
   async refreshTaskStatus(taskId: number) {
     const task = await this.prisma.wecomGroupMessageTask.findUniqueOrThrow({
       where: { id: taskId },
-      include: { recipients: true },
+      include: { recipients: true, createdBy: true },
     });
     if (!task.wecomMsgid) return { ok: false, msg: '未提交企业微信' };
 
-    // 成员执行状态
+    // === 1. 获取成员发送任务列表 ===
+    let memberTasks: Array<{ userid: string; status: number }> = [];
     let confirmedCount = 0;
     try {
-      const status = await this.api.queryGroupMessageSendStatus(task.wecomMsgid);
-      for (const d of status?.detail ?? []) {
-        if (Number(d.status) >= 2) confirmedCount++; // 2=已发送 3=已失败
-      }
+      const r: any = await this.api.queryGroupMessageSendStatus(task.wecomMsgid);
+      memberTasks = r?.task_list ?? [];
+      // task_list 里 status >= 2 表示已发送
+      confirmedCount = memberTasks.filter((m) => Number(m.status) >= 2).length;
+      this.logger.log(
+        `[refreshTaskStatus] msgid=${task.wecomMsgid} 成员任务数=${memberTasks.length} 已确认=${confirmedCount}`,
+      );
     } catch (e) {
       this.logger.warn(`查询成员执行状态失败: ${(e as Error).message}`);
     }
 
-    // 客户级发送结果
+    // === 2. 逐个成员查询客户级发送结果 ===
+    // 企微 get_groupmsg_send_result **必须传 userid**，且只返回该成员的发送记录
     let sentSuccess = 0;
     let sentFail = 0;
     const failMap = new Map<string, string>();
-    try {
+
+    for (const member of memberTasks) {
       let cursor: string | undefined;
       do {
-        const r: any = await this.api.queryGroupMessageCustomerResult(
-          task.wecomMsgid,
-          500,
-          cursor,
-        );
-        for (const item of r.sent_list ?? []) {
-          if (item.status === 'success') sentSuccess++;
-          else {
-            sentFail++;
-            failMap.set(item.external_userid, item.status);
+        try {
+          const r: any = await this.api.queryGroupMessageCustomerResult(
+            task.wecomMsgid,
+            member.userid,
+            500,
+            cursor,
+          );
+          for (const item of r?.send_list ?? []) {
+            const status = Number(item.status);
+            if (status === 1) {
+              // 1 = 已发送成功
+              sentSuccess++;
+            } else if (status === 2) {
+              // 2 = 因客户不是好友导致发送失败
+              sentFail++;
+              failMap.set(item.external_userid, '客户非好友');
+            } else if (status === 3) {
+              // 3 = 因客户已收到其他群发消息导致发送失败（超限）
+              sentFail++;
+              failMap.set(item.external_userid, '客户本月群发超限');
+            }
+            // status === 0 未发送 不计入
           }
+          cursor = r?.next_cursor;
+        } catch (e) {
+          this.logger.warn(
+            `查询成员 ${member.userid} 客户级结果失败: ${(e as Error).message}`,
+          );
+          cursor = undefined; // 跳出循环避免无限重试
         }
-        for (const f of r.fail_list ?? []) {
-          sentFail++;
-          failMap.set(f.external_userid, f.fail_reason ?? 'fail');
-        }
-        cursor = r.next_cursor;
       } while (cursor);
-    } catch (e) {
-      this.logger.warn(`查询客户级发送结果失败: ${(e as Error).message}`);
     }
 
-    // 计算最终状态
+    // === 3. 计算最终状态 ===
     let status: GroupMessageStatus = task.status;
     if (confirmedCount > 0) {
       const totalTry = sentSuccess + sentFail;
-      if (sentFail === 0 && totalTry === task.totalRecipients) {
+      if (sentFail === 0 && totalTry >= task.totalRecipients) {
         status = GroupMessageStatus.ALL_SUCCESS;
       } else if (sentSuccess > 0 && sentFail > 0) {
         status = GroupMessageStatus.PARTIAL_SUCCESS;
@@ -156,16 +182,20 @@ export class WecomGroupMessageService {
       }
     }
 
-    // 更新 recipient 级状态
+    // === 4. 更新 recipient 级状态 ===
     for (const rec of task.recipients) {
-      const s = failMap.get(rec.externalUserid);
-      if (s) {
+      const failReason = failMap.get(rec.externalUserid);
+      if (failReason) {
         await this.prisma.wecomGroupMessageRecipient.update({
           where: { id: rec.id },
-          data: { wecomSendStatus: s, customerReceived: false, wecomFailReason: s },
+          data: {
+            wecomSendStatus: 'fail',
+            customerReceived: false,
+            wecomFailReason: failReason,
+          },
         });
-      } else if (sentSuccess > 0) {
-        // 没在 failList 就先标记为 received=true（保守）
+      } else if (sentSuccess > 0 && !failReason) {
+        // 不在 failMap 里 + 有成功记录 → 保守标记为已发送
         await this.prisma.wecomGroupMessageRecipient.update({
           where: { id: rec.id },
           data: {

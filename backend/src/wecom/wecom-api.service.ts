@@ -205,20 +205,32 @@ export class WecomApiService implements OnModuleInit {
     };
   }
 
-  /** 查询群发任务成员执行状态（是否确认发送） */
-  async queryGroupMessageSendStatus(msgid: string) {
-    if (this.isMock()) return { detail: [], total: 0 };
+  /**
+   * 查询群发任务成员发送任务列表（哪些成员收到了群发任务、是否已发送）
+   * 注意：返回字段是 task_list（不是 detail），status 数字 0=未发送 2=已发送
+   */
+  async queryGroupMessageSendStatus(msgid: string, limit = 500) {
+    if (this.isMock()) return { task_list: [], next_cursor: undefined };
     const token = await this.getContactAccessToken();
     const url = `${this.baseUrl}/cgi-bin/externalcontact/get_groupmsg_task?access_token=${token}`;
-    return this.requestJson<any>(url, 'POST', { msgid });
+    return this.requestJson<any>(url, 'POST', { msgid, limit });
   }
 
-  /** 查询群发任务客户级发送结果（分页） */
-  async queryGroupMessageCustomerResult(msgid: string, limit = 500, cursor?: string) {
-    if (this.isMock()) return { sent_list: [], fail_list: [], next_cursor: undefined };
+  /**
+   * 查询群发任务客户级发送结果（分页）
+   * 注意：userid 是**必填**参数！必须传发送成员的企微 userid
+   * 返回字段是 send_list（不是 sent_list），status 数字：0=未发送 1=已发送 2=非好友 3=超限
+   */
+  async queryGroupMessageCustomerResult(
+    msgid: string,
+    userid: string,
+    limit = 500,
+    cursor?: string,
+  ) {
+    if (this.isMock()) return { send_list: [], next_cursor: undefined };
     const token = await this.getContactAccessToken();
     const url = `${this.baseUrl}/cgi-bin/externalcontact/get_groupmsg_send_result?access_token=${token}`;
-    const body: any = { msgid, limit };
+    const body: any = { msgid, userid, limit };
     if (cursor) body.cursor = cursor;
     return this.requestJson<any>(url, 'POST', body);
   }
