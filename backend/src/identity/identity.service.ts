@@ -37,7 +37,22 @@ export class IdentityService {
     const matchedIdentities = await this.matchIdentitiesToCustomers();
     const linkedLive = await this.linkLiveRecordsToCustomer();
     const linkedReplay = await this.linkReplayRecordsToCustomer();
-    return { matchedIdentities, linkedLive, linkedReplay };
+    // 弱匹配兜底：强标识（unionId/手机号/uid 等）全断后，
+    // 按「同一课程名单内昵称唯一」自动关联——销售零操作；有重名歧义则留空不猜。
+    const linkedLiveByName = await this.linkLiveRecordsByNameInRoster();
+    const linkedReplayByName = await this.linkReplayRecordsByNameInRoster();
+    if (linkedLiveByName + linkedReplayByName > 0) {
+      this.logger.log(
+        `[Identity] 名单内昵称唯一弱匹配：直播 ${linkedLiveByName} 条、回放 ${linkedReplayByName} 条`,
+      );
+    }
+    return {
+      matchedIdentities,
+      linkedLive,
+      linkedReplay,
+      linkedLiveByName,
+      linkedReplayByName,
+    };
   }
 
   /** 按优先级匹配：将 feice_identity 与 customer 关联 */
@@ -173,6 +188,86 @@ export class IdentityService {
           OR (fi."third_party_student_id" IS NOT NULL AND r."third_party_student_id" = fi."third_party_student_id")
           OR (fi."unionId" IS NOT NULL AND NULLIF((CASE WHEN left(r."rawData", 1) = '{' THEN r."rawData"::jsonb END) ->> 'unionId', '') = fi."unionId")
         )
+    `;
+    return Number(updated);
+  }
+
+  /**
+   * 弱匹配（直播）：强标识全断的记录，用「飞策昵称 ↔ 客户微信名」兜底。
+   * 安全边界——必须同时满足：
+   *   1) 该记录所属课程的邀请名单（course_rosters，经 course_monitoring_tasks 关联）内；
+   *   2) 名单里昵称（去空格、忽略大小写）与飞策 nickName 完全一致的客户「恰好 1 个」。
+   * 有重名 / 不在名单 / 无昵称 → 不更新（customerId 保持 NULL，绝不张冠李戴）。
+   * 弱匹配只回填记录的 customerId，不写 feiceIdentityId，便于与强匹配区分。
+   */
+  async linkLiveRecordsByNameInRoster() {
+    const updated = await this.prisma.$executeRaw`
+      WITH nick AS (
+        SELECT r.id AS rec_id,
+               r."courseId" AS course_id,
+               LOWER(BTRIM(CASE WHEN left(r."rawData", 1) = '{'
+                                THEN r."rawData"::jsonb ->> 'nickName' END)) AS nn
+        FROM live_watch_records r
+        WHERE r."customerId" IS NULL
+          AND r."userType" = 'student'
+      ),
+      cand AS (
+        SELECT n.rec_id, c.id AS cid
+        FROM nick n
+        JOIN course_monitoring_tasks t ON t."courseId" = n.course_id
+        JOIN course_rosters cr
+          ON cr."taskId" = t.id AND cr."isExcluded" = false
+        JOIN customers c
+          ON c.id = cr."customerId" AND c."isDeleted" = false
+        WHERE n.nn IS NOT NULL AND n.nn <> ''
+          AND LOWER(BTRIM(c.nickname)) = n.nn
+      ),
+      uniq AS (
+        SELECT rec_id, MIN(cid) AS cid
+        FROM cand
+        GROUP BY rec_id
+        HAVING COUNT(DISTINCT cid) = 1
+      )
+      UPDATE live_watch_records r
+      SET "customerId" = u.cid
+      FROM uniq u
+      WHERE r.id = u.rec_id AND r."customerId" IS NULL
+    `;
+    return Number(updated);
+  }
+
+  /** 弱匹配（回放）：逻辑同直播，回放表无 userType 字段故不加该过滤。 */
+  async linkReplayRecordsByNameInRoster() {
+    const updated = await this.prisma.$executeRaw`
+      WITH nick AS (
+        SELECT r.id AS rec_id,
+               r."courseId" AS course_id,
+               LOWER(BTRIM(CASE WHEN left(r."rawData", 1) = '{'
+                                THEN r."rawData"::jsonb ->> 'nickName' END)) AS nn
+        FROM replay_watch_records r
+        WHERE r."customerId" IS NULL
+      ),
+      cand AS (
+        SELECT n.rec_id, c.id AS cid
+        FROM nick n
+        JOIN course_monitoring_tasks t ON t."courseId" = n.course_id
+        JOIN course_rosters cr
+          ON cr."taskId" = t.id AND cr."isExcluded" = false
+        JOIN customers c
+          ON c.id = cr."customerId" AND c."isDeleted" = false
+        WHERE n.nn IS NOT NULL AND n.nn <> ''
+          AND LOWER(BTRIM(c.nickname)) = n.nn
+      ),
+      uniq AS (
+        SELECT rec_id, MIN(cid) AS cid
+        FROM cand
+        GROUP BY rec_id
+        HAVING COUNT(DISTINCT cid) = 1
+      )
+      UPDATE replay_watch_records r
+      SET "customerId" = u.cid
+      FROM uniq u
+      WHERE r.id = u.rec_id AND r."customerId" IS NULL
     `;
     return Number(updated);
   }
