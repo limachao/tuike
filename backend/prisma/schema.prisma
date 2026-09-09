@@ -461,6 +461,7 @@ model WecomGroupMessageRecipient {
 
   @@unique([messageTaskId, customerId])
   @@index([customerId])
+  @@index([messageTaskId, externalUserid]) // refreshTaskStatus 批量更新用
   @@map("wecom_group_message_recipients")
 }
 

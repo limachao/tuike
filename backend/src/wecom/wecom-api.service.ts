@@ -215,17 +215,22 @@ export class WecomApiService implements OnModuleInit {
    * @param originalMsgid add_msg_template 返回的原始 msgid
    * @param senderWecomUserId 发送成员的企微 userid（用来过滤）
    * @param content 发送内容（用来二次匹配）
+   * @param createdAt 任务创建时间（用来确定查询时间窗口，避免 10 分钟太短）
    */
   async resolveActualMsgid(
     originalMsgid: string,
     senderWecomUserId?: string,
     content?: string,
+    createdAt?: Date,
   ): Promise<string | null> {
     if (this.isMock()) return originalMsgid;
     const token = await this.getContactAccessToken();
     const now = Math.floor(Date.now() / 1000);
-    // 先查近 10 分钟（刚提交的群发应该在这个窗口里）
-    const start = now - 600;
+    // 用创建时间来定窗口：创建前 1 分钟 → 创建后 24 小时
+    // 这样不管用户隔多久才点刷新都能查到（企微接口最多返回 30 天内数据）
+    const start = createdAt
+      ? Math.floor(createdAt.getTime() / 1000) - 60
+      : now - 86400; // fallback：查过去 24h
     let cursor: string | undefined;
     do {
       const url = `${this.baseUrl}/cgi-bin/externalcontact/get_groupmsg_list_v2?access_token=${token}`;
@@ -248,12 +253,16 @@ export class WecomApiService implements OnModuleInit {
           return g.msgid;
         }
       }
-      // 再试内容精确匹配（用完整 content，而不是前 10 字）
+      // 再试内容+发送成员精确匹配（双重校验防误匹配）
       if (content) {
         for (const g of groups) {
-          if ((g.text?.content ?? '') === content.trim()) {
+          const contentMatch = (g.text?.content ?? '') === content.trim();
+          const senderMatch =
+            !senderWecomUserId ||
+            g.sender_list?.some((s: any) => s.userid === senderWecomUserId);
+          if (contentMatch && senderMatch) {
             this.logger.log(
-              `[resolveActualMsgid] 内容精确匹配 msgid=${g.msgid}（原 msgid=${originalMsgid}）`,
+              `[resolveActualMsgid] 内容+发送成员匹配 msgid=${g.msgid}（原 msgid=${originalMsgid}）`,
             );
             return g.msgid;
           }

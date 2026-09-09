@@ -117,7 +117,11 @@ export class WecomGroupMessageService {
     try {
       const task = await this.prisma.wecomGroupMessageTask.findUniqueOrThrow({
         where: { id: taskId },
-        include: { recipients: true, createdBy: true },
+        // 只 select 必要字段，避免把 6000 条 recipient 的所有字段加载到内存
+        include: {
+          recipients: { select: { id: true, externalUserid: true } },
+          createdBy: true,
+        },
       });
       if (!task.wecomMsgid) {
         return { ok: false, msg: '未提交企业微信' };
@@ -142,6 +146,7 @@ export class WecomGroupMessageService {
           resolvedMsgid,
           task.createdBy?.wecomUserId ?? undefined,
           task.finalContent ?? undefined,
+          task.wecomCreatedAt ?? undefined,
         );
         if (actual && actual !== resolvedMsgid) {
           this.logger.log(`[refreshTaskStatus] 找到真实 msgid=${actual}`);
