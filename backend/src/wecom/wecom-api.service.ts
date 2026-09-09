@@ -107,6 +107,21 @@ export class WecomApiService implements OnModuleInit {
     };
   }
 
+  /** 获取客户标签库（返回 tagId → tagName 映射）。type=2 企业标签 */
+  async listCustomerTags(): Promise<Map<string, string>> {
+    if (this.isMock()) return new Map();
+    const token = await this.getContactAccessToken();
+    const url = `${this.baseUrl}/cgi-bin/externalcontact/list_tag?access_token=${token}&type=2`;
+    const r = await this.requestJson<any>(url, 'GET');
+    const map = new Map<string, string>();
+    for (const group of r.tag_group ?? []) {
+      for (const tag of group.tag ?? []) {
+        if (tag?.id && tag?.name) map.set(String(tag.id), String(tag.name));
+      }
+    }
+    return map;
+  }
+
   /** 获取单个客户详情（含添加方式等） */
   async getCustomerDetail(externalUserid: string, cursor?: string) {
     if (this.isMock()) return null;

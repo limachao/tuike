@@ -29,17 +29,31 @@ interface CustomerSyncRow {
 }
 
 /**
- * 从企微 follow_info/follow_user 中提取客户标签名。
- * 企微返回 tags: [{group_id, tag_id, tag_name, type}]，tag_name 直接可读。
- * 去重、去空，无标签时返回 null（不存 "[]"，便于 SQL COALESCE 判断）。
+ * 从企微 follow_info 中提取客户标签名。
+ *
+ * 企微 API 有两种返回形式（不同环境/版本不同）：
+ *   1. follow_info.tags: [{group_id, tag_id, tag_name, type}] —— 直接带 tag_name
+ *   2. follow_info.tag_id: string[] —— 只返回 tag_id，需通过标签库接口查 name
+ *
+ * 本函数依次尝试两种路径，tagMap 由调用方预先拉好标签库（避免 N 次远程调用）。
+ * 去重、去空，无标签时返回 null。
  */
-function extractWecomTagNames(followInfo: any): string[] | null {
-  const list = Array.isArray(followInfo?.tags) ? followInfo.tags : [];
-  const names = list
-    .map((t: any) => String(t?.tag_name ?? '').trim())
-    .filter(Boolean);
-  const uniq: string[] = Array.from(new Set(names));
-  return uniq.length ? uniq : null;
+function extractWecomTagNames(
+  followInfo: any,
+  tagMap: Map<string, string>,
+): string[] | null {
+  const names = new Set<string>();
+  // 路径 1：follow_info.tags 直接带 tag_name
+  for (const t of Array.isArray(followInfo?.tags) ? followInfo.tags : []) {
+    const n = String(t?.tag_name ?? '').trim();
+    if (n) names.add(n);
+  }
+  // 路径 2：follow_info.tag_id 需查标签库
+  for (const tid of Array.isArray(followInfo?.tag_id) ? followInfo.tag_id : []) {
+    const n = tagMap.get(String(tid));
+    if (n) names.add(n);
+  }
+  return names.size ? Array.from(names) : null;
 }
 
 @Injectable()
@@ -99,7 +113,20 @@ export class WecomSyncService {
   }
 
   /** 同步指定销售名下的客户（批量分页拉取详情，7000+ 客户约几分钟） */
-  async syncCustomersForSales(salesId: number, triggeredBy?: number) {
+  async syncCustomersForSales(
+    salesId: number,
+    triggeredBy?: number,
+    tagMap?: Map<string, string> | null,
+  ) {
+    // 兜底：如果调用方没传标签库，这里拉一次
+    let tm = tagMap;
+    if (!tm) {
+      try {
+        tm = await this.api.listCustomerTags();
+      } catch {
+        tm = new Map();
+      }
+    }
     const sales = await this.users.findById(salesId);
     if (!sales?.wecomUserId) {
       throw new Error('该销售尚未绑定企业微信 userid');
@@ -125,7 +152,7 @@ export class WecomSyncService {
           const externalUserid = item?.external_contact?.external_userid;
           if (!externalUserid) continue;
           seenExternalUserids.add(externalUserid);
-          rows.push(this.extractCustomerRow(externalUserid, item));
+          rows.push(this.extractCustomerRow(externalUserid, item, tm));
           total++;
         }
         cursor = nextCursor;
@@ -163,11 +190,19 @@ export class WecomSyncService {
 
   /** 同步全部销售名下客户 */
   async syncAllCustomers(triggeredBy?: number) {
+    // 先拉一次标签库，后续按销售同步时复用，避免 N 次远程调用
+    let tagMap: Map<string, string> | null = null;
+    try {
+      tagMap = await this.api.listCustomerTags();
+      this.logger.log(`企微标签库已加载 ${tagMap.size} 个标签`);
+    } catch (e) {
+      this.logger.warn(`拉取企微标签库失败（标签名将无法解析）: ${(e as Error).message}`);
+    }
     const salesList = await this.users.listActiveSales();
     const result: any = {};
     for (const s of salesList) {
       if (!s.wecomUserId) continue;
-      const r = await this.syncCustomersForSales(s.id, triggeredBy);
+      const r = await this.syncCustomersForSales(s.id, triggeredBy, tagMap);
       result[s.id] = r;
     }
     return result;
@@ -179,7 +214,12 @@ export class WecomSyncService {
    * externalcontact/get 返回为 { external_contact, follow_user: [] }
    * 不传 detail 时回退到逐个查详情（兼容旧调用）
    */
-  private async upsertCustomer(externalUserid: string, salesId: number, detail?: any) {
+  private async upsertCustomer(
+    externalUserid: string,
+    salesId: number,
+    detail?: any,
+    tagMap?: Map<string, string>,
+  ) {
     // 查详情（Mock 模式或未传入时可能为空）
     if (!detail) {
       try {
@@ -200,7 +240,7 @@ export class WecomSyncService {
     const avatar = contact.avatar ?? null;
     const gender = contact.gender ?? 0;
     const tags = JSON.stringify(contact.external_profile?.external_attr ?? []);
-    const wecomTagNames = extractWecomTagNames(followInfo);
+    const wecomTagNames = extractWecomTagNames(followInfo, tagMap ?? new Map());
     const wecomTags = wecomTagNames ? JSON.stringify(wecomTagNames) : null;
     const remarkMobiles = followInfo?.remark_mobiles?.join(',') ?? null;
     // unionid：企微后台绑定微信开发者ID后 externalcontact/get 才会返回。
@@ -278,7 +318,11 @@ export class WecomSyncService {
   // ========= 批量同步（性能：万级客户从 ~6 万条 SQL 降到 ~120 条） =========
 
   /** 从企微批量接口的单条返回中提取客户字段 */
-  private extractCustomerRow(externalUserid: string, detail: any): CustomerSyncRow {
+  private extractCustomerRow(
+    externalUserid: string,
+    detail: any,
+    tagMap: Map<string, string> = new Map(),
+  ) {
     const contact = detail?.external_contact ?? {};
     const followInfo =
       detail?.follow_info ??
@@ -301,9 +345,9 @@ export class WecomSyncService {
       // 空字符串归一为 null（wecom_unionid 有唯一约束，多个 '' 会冲突）
       wecomUnionid: contact.unionid ? contact.unionid : null,
       tags: JSON.stringify(contact.external_profile?.external_attr ?? []),
-      // 企微客户标签名（follow_info.tags 直接带 tag_name）
+      // 企微客户标签名（follow_info.tag_id / follow_info.tags）
       wecomTags: (() => {
-        const names = extractWecomTagNames(followInfo);
+        const names = extractWecomTagNames(followInfo, tagMap);
         return names ? JSON.stringify(names) : null;
       })(),
       addTime: followTimeRaw ? new Date(Number(followTimeRaw) * 1000) : null,
