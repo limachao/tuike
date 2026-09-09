@@ -93,7 +93,7 @@ export default function DashboardPage() {
           <button onClick={sync} disabled={syncing} className="btn-ghost">
             {syncing ? '⏳ 加载中…' : '👤 获取我的客户信息'}
           </button>
-          <Link to="/tasks/new" className="btn-primary">＋ 创建监控任务</Link>
+          <Link to="/quick-send" className="btn-primary">＋ 创建监控任务</Link>
         </div>
       </div>
 
@@ -118,7 +118,7 @@ export default function DashboardPage() {
           {tasks.length === 0 ? (
             <div className="py-14 text-center text-text-tertiary text-sm">
               还没有任务，先去
-              <Link to="/tasks/new" className="mx-1 text-brand-300">创建一个监控任务</Link>
+              <Link to="/quick-send" className="mx-1 text-brand-300">创建一个监控任务</Link>
               吧
             </div>
           ) : (
