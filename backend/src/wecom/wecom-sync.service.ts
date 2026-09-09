@@ -1,7 +1,8 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, BadRequestException } from '@nestjs/common';
 import { WecomApiService } from './wecom-api.service';
 import { PrismaService } from '../common/prisma/prisma.service';
 import { UsersService } from '../users/users.service';
+import { RedisService } from '../common/redis/redis.service';
 import { v4 as uuidv4 } from 'uuid';
 import * as crypto from 'crypto';
 
@@ -69,6 +70,7 @@ export class WecomSyncService {
     private readonly api: WecomApiService,
     private readonly prisma: PrismaService,
     private readonly users: UsersService,
+    private readonly redis: RedisService,
   ) {}
 
   /** 同步成员（应用可见范围内开通了客户联系的销售） */
@@ -123,6 +125,14 @@ export class WecomSyncService {
     triggeredBy?: number,
     tagMap?: Map<string, { name: string; group: string }> | null,
   ) {
+    // Redis 防重入锁：同一销售 5 分钟内只能触发一次同步
+    const lockKey = `sync:customers:${salesId}`;
+    const acquired = await this.redis.tryLock(lockKey, 300);
+    if (!acquired) {
+      throw new BadRequestException(
+        '客户同步正在进行中，请 5 分钟后再试（系统自动每 30 分钟同步一次）',
+      );
+    }
     // 兜底：如果调用方没传标签库，这里拉一次
     let tm: Map<string, { name: string; group: string }> | null = tagMap ?? null;
     if (!tm) {
