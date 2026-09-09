@@ -18,6 +18,36 @@ export class WecomGroupMessageService {
   ) {}
 
   /**
+   * 快捷群发专用：直接调企微 API 创建任务并返回 msgid。
+   * 不写数据库，由调用方自己写（避免嵌套事务 + 大列表锁表）。
+   */
+  async submitToWecomDraft(
+    salesId: number,
+    textContent: string,
+    linkUrl: string,
+    externalUserIds: string[],
+    linkTitle = '点击进入',
+  ): Promise<{ msgid: string; failList?: string[] }> {
+    const sales = await this.prisma.user.findUniqueOrThrow({
+      where: { id: salesId },
+    });
+    if (!sales.wecomUserId) {
+      throw new Error('销售未绑定企业微信 userid');
+    }
+    if (externalUserIds.length === 0) throw new Error('名单为空');
+    if (externalUserIds.length > 10000) {
+      throw new Error('企业微信单次群发最多支持 10000 位客户');
+    }
+    return this.api.createGroupMessageTask({
+      senderWecomUserId: sales.wecomUserId,
+      externalUserIds,
+      textContent,
+      linkUrl,
+      linkTitle,
+    });
+  }
+
+  /**
    * 调用企业微信接口创建群发任务，并写入 msgid
    */
   async submitToWecom(taskId: number) {

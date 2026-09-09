@@ -171,7 +171,13 @@ export default function QuickSendPage() {
       alert(`已创建群发任务 #${data.messageTask.id}！\n请到企业微信手机端确认发送。`);
       nav(`/reminders/${data.messageTask.id}`);
     } catch (e: any) {
-      alert(e?.response?.data?.message ?? '发送失败，请重试');
+      const msg = e?.response?.data?.message ?? e?.message ?? '发送失败，请重试';
+      // 超时或网络异常时，后端可能已成功但前端没收到响应——引导用户查任务列表确认
+      if (e?.code === 'ECONNABORTED' || e?.response?.status === 504) {
+        alert(`请求超时，但任务可能已提交。\n请到「提醒任务」页面查看是否有新任务，不要重复发送！`);
+      } else {
+        alert(msg);
+      }
     } finally {
       setSending(false);
     }

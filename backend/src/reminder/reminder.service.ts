@@ -441,6 +441,23 @@ export class ReminderService {
     if (customers.length === 0) throw new BadRequestException('选中的客户均不在你名下');
 
     const taskNo = `QS${Date.now()}${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
+
+    // 先调企微 API（同步创建任务，通常 2-5 秒返回 msgid）。
+    // 成功后再写数据库——避免 DB 写了但企微没发的半残状态。
+    let wecomResult: { msgid: string; failList?: string[] };
+    try {
+      wecomResult = await this.wecomGroup.submitToWecomDraft(
+        params.operatorId,
+        content.trim(),
+        url.trim(),
+        customers.map((c) => c.externalUserid),
+      );
+    } catch (e: any) {
+      throw new BadRequestException(`企微创建群发任务失败: ${e.message ?? e}`);
+    }
+
+    // DB 写入分两步：先写主记录（DRAFT），再批量写 recipient。
+    // Prisma createMany 会用 unnest 批量插入，6000 条只需 1-2 秒。
     const groupTask = await this.prisma.wecomGroupMessageTask.create({
       data: {
         taskNo,
@@ -450,27 +467,22 @@ export class ReminderService {
         finalContent: content.trim(),
         finalUrl: url.trim(),
         entryType: 'live',
-        status: GroupMessageStatus.DRAFT,
+        status: GroupMessageStatus.PENDING_CONFIRM,
+        wecomMsgid: wecomResult.msgid,
+        wecomCreatedAt: new Date(),
         totalRecipients: customers.length,
-        recipients: {
-          create: customers.map((c) => ({
-            customerId: c.id,
-            externalUserid: c.externalUserid,
-          })),
-        },
+        failList: wecomResult.failList ? JSON.stringify(wecomResult.failList) : undefined,
+        sentFailCount: wecomResult.failList?.length ?? 0,
       },
-      include: { recipients: true },
     });
 
-    try {
-      await this.wecomGroup.submitToWecom(groupTask.id);
-    } catch (e: any) {
-      await this.prisma.wecomGroupMessageTask.update({
-        where: { id: groupTask.id },
-        data: { status: GroupMessageStatus.FAILED },
-      });
-      throw e;
-    }
+    await this.prisma.wecomGroupMessageRecipient.createMany({
+      data: customers.map((c) => ({
+        messageTaskId: groupTask.id,
+        customerId: c.id,
+        externalUserid: c.externalUserid,
+      })),
+    });
 
     await this.audit.log({
       userId: params.operatorId,
