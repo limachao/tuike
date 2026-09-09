@@ -70,13 +70,12 @@ export default function DashboardPage() {
 
   const [syncing, setSyncing] = useState(false);
   const sync = async () => {
+    if (syncing) return;
     setSyncing(true);
     try {
       await api.post('/wecom/sync/my-customers');
-      load();
-      alert('已开始获取你的客户信息（学员较多时约需几分钟），稍后刷新「客户信息」页面即可看到最新数据。');
-    } catch (e: any) {
-      alert(e?.response?.data?.message ?? '获取客户信息失败');
+    } catch {
+      // 静默失败，按钮恢复后用户可再次点击
     } finally {
       setSyncing(false);
     }
@@ -92,7 +91,7 @@ export default function DashboardPage() {
         </div>
         <div className="flex gap-2">
           <button onClick={sync} disabled={syncing} className="btn-ghost">
-            {syncing ? '↻ 获取中…' : '👤 获取我的客户信息'}
+            {syncing ? '⏳ 加载中…' : '👤 获取我的客户信息'}
           </button>
           <Link to="/tasks/new" className="btn-primary">＋ 创建监控任务</Link>
         </div>
