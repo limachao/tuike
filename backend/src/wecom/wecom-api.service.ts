@@ -108,16 +108,16 @@ export class WecomApiService implements OnModuleInit {
   }
 
   /**
-   * 获取客户标签库（返回 tagId → tagName 映射）。
+   * 获取客户标签库（返回 tagId → {name, group} 映射）。
    *
    * 注意：教育版企微（行业版）用 get_corp_tag_list，标准版用 list_tag。
    * 教育版如果调 list_tag 会返回空响应体（不是错误码，是纯空字符串），
    * 所以优先试 get_corp_tag_list，失败再回退 list_tag。
    */
-  async listCustomerTags(): Promise<Map<string, string>> {
+  async listCustomerTags(): Promise<Map<string, { name: string; group: string }>> {
     if (this.isMock()) return new Map();
     const token = await this.getContactAccessToken();
-    const map = new Map<string, string>();
+    const map = new Map<string, { name: string; group: string }>();
     // 优先教育版接口
     const candidates = [
       '/cgi-bin/externalcontact/get_corp_tag_list',
@@ -130,7 +130,12 @@ export class WecomApiService implements OnModuleInit {
         if (r?.tag_group?.length) {
           for (const group of r.tag_group) {
             for (const tag of group.tag ?? []) {
-              if (tag?.id && tag?.name) map.set(String(tag.id), String(tag.name));
+              if (tag?.id && tag?.name) {
+                map.set(String(tag.id), {
+                  name: String(tag.name),
+                  group: String(group.group_name ?? ''),
+                });
+              }
             }
           }
           if (map.size) break; // 有数据就停

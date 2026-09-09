@@ -29,31 +29,36 @@ interface CustomerSyncRow {
 }
 
 /**
- * 从企微 follow_info 中提取客户标签名。
+ * 从企微 follow_info 中提取客户标签（含组名）。
  *
- * 企微 API 有两种返回形式（不同环境/版本不同）：
+ * 存储格式：[{name, group}]，便于后端列表接口按组过滤。
+ * 企微 API 有两种返回形式：
  *   1. follow_info.tags: [{group_id, tag_id, tag_name, type}] —— 直接带 tag_name
- *   2. follow_info.tag_id: string[] —— 只返回 tag_id，需通过标签库接口查 name
- *
- * 本函数依次尝试两种路径，tagMap 由调用方预先拉好标签库（避免 N 次远程调用）。
- * 去重、去空，无标签时返回 null。
+ *   2. follow_info.tag_id: string[] —— 只返回 tag_id，需通过标签库接口查 name + group
  */
 function extractWecomTagNames(
   followInfo: any,
-  tagMap: Map<string, string>,
-): string[] | null {
-  const names = new Set<string>();
+  tagMap: Map<string, { name: string; group: string }>,
+): Array<{ name: string; group: string }> | null {
+  const seen = new Set<string>();
+  const out: Array<{ name: string; group: string }> = [];
   // 路径 1：follow_info.tags 直接带 tag_name
   for (const t of Array.isArray(followInfo?.tags) ? followInfo.tags : []) {
     const n = String(t?.tag_name ?? '').trim();
-    if (n) names.add(n);
+    if (n && !seen.has(n)) {
+      seen.add(n);
+      out.push({ name: n, group: String(t?.group_name ?? '') });
+    }
   }
-  // 路径 2：follow_info.tag_id 需查标签库
+  // 路径 2：follow_info.tag_id 需查标签库（带 group 信息）
   for (const tid of Array.isArray(followInfo?.tag_id) ? followInfo.tag_id : []) {
-    const n = tagMap.get(String(tid));
-    if (n) names.add(n);
+    const info = tagMap.get(String(tid));
+    if (info?.name && !seen.has(info.name)) {
+      seen.add(info.name);
+      out.push({ name: info.name, group: info.group });
+    }
   }
-  return names.size ? Array.from(names) : null;
+  return out.length ? out : null;
 }
 
 @Injectable()
@@ -116,10 +121,10 @@ export class WecomSyncService {
   async syncCustomersForSales(
     salesId: number,
     triggeredBy?: number,
-    tagMap?: Map<string, string> | null,
+    tagMap?: Map<string, { name: string; group: string }> | null,
   ) {
     // 兜底：如果调用方没传标签库，这里拉一次
-    let tm = tagMap;
+    let tm: Map<string, { name: string; group: string }> | null = tagMap ?? null;
     if (!tm) {
       try {
         tm = await this.api.listCustomerTags();
@@ -191,7 +196,7 @@ export class WecomSyncService {
   /** 同步全部销售名下客户 */
   async syncAllCustomers(triggeredBy?: number) {
     // 先拉一次标签库，后续按销售同步时复用，避免 N 次远程调用
-    let tagMap: Map<string, string> | null = null;
+    let tagMap: Map<string, { name: string; group: string }> | null = null;
     try {
       tagMap = await this.api.listCustomerTags();
       this.logger.log(`企微标签库已加载 ${tagMap.size} 个标签`);
@@ -218,7 +223,7 @@ export class WecomSyncService {
     externalUserid: string,
     salesId: number,
     detail?: any,
-    tagMap?: Map<string, string>,
+    tagMap?: Map<string, { name: string; group: string }>,
   ) {
     // 查详情（Mock 模式或未传入时可能为空）
     if (!detail) {
@@ -321,7 +326,7 @@ export class WecomSyncService {
   private extractCustomerRow(
     externalUserid: string,
     detail: any,
-    tagMap: Map<string, string> = new Map(),
+    tagMap: Map<string, { name: string; group: string }> = new Map(),
   ) {
     const contact = detail?.external_contact ?? {};
     const followInfo =

@@ -383,14 +383,30 @@ export class ReminderService {
     }));
   }
 
-  /** 解析 wecom_tags JSON 字符串为字符串数组，容错非法/空值 */
+  /**
+   * 解析 wecom_tags JSON，只返回「推课方舟状态」组的标签名。
+   *
+   * 兼容两种存储格式：
+   *   新格式：[{"name":"需要推课","group":"推课方舟状态"}, ...]
+   *   旧格式（升级前）：["24年客户", "王老师抖音", ...] —— 旧格式全部忽略
+   */
   private parseTagArray(raw: unknown): string[] {
     if (!raw || typeof raw !== 'string') return [];
     try {
       const arr = JSON.parse(raw);
-      return Array.isArray(arr)
-        ? arr.map((t) => String(t).trim()).filter(Boolean)
-        : [];
+      if (!Array.isArray(arr)) return [];
+      return arr
+        .map((t) => {
+          // 新格式：带 group 的对象
+          if (t && typeof t === 'object' && 'name' in t && 'group' in t) {
+            const g: string = String((t as any).group ?? '');
+            const n: string = String((t as any).name ?? '').trim();
+            // 只保留「推课方舟」相关组的标签（关键字匹配，方便以后组名微调）
+            if (g.includes('推课方舟') && n) return n;
+          }
+          return null;
+        })
+        .filter((x): x is string => !!x);
     } catch {
       return [];
     }
