@@ -418,12 +418,29 @@ export class ReminderService {
     url?: string;
     customerIds: number[];
     linkTitle?: string;
+    /** 定时发送：ISO 时间字符串。传入则只存库（状态 SCHEDULED），到点由 cron 自动提交企微 */
+    scheduledAt?: string;
   }) {
     const { content, customerIds, linkTitle = '点击进入' } = params;
     const url = params.url?.trim() ?? '';
     if (!content?.trim()) throw new BadRequestException('文案不能为空');
     if (!customerIds?.length) throw new BadRequestException('请至少选择一位客户');
     if (customerIds.length > 10000) throw new BadRequestException('单次最多 10000 人');
+
+    // 定时时间校验：必须是未来 2 分钟 ~ 30 天之间
+    let scheduledDate: Date | null = null;
+    if (params.scheduledAt) {
+      const d = new Date(params.scheduledAt);
+      if (Number.isNaN(d.getTime())) throw new BadRequestException('定时时间格式不正确');
+      const diffMs = d.getTime() - Date.now();
+      if (diffMs < 2 * 60 * 1000) {
+        throw new BadRequestException('定时发送时间至少要在 2 分钟之后');
+      }
+      if (diffMs > 30 * 24 * 60 * 60 * 1000) {
+        throw new BadRequestException('定时发送最远只能设置 30 天');
+      }
+      scheduledDate = d;
+    }
 
     // 文案字节校验：企微 text.content 最多 4000 字节（UTF-8，中文 1 字 ≈ 3 字节）
     const contentBytes = Buffer.byteLength(content.trim(), 'utf8');
@@ -473,6 +490,40 @@ export class ReminderService {
     }
 
     const taskNo = `QS${Date.now()}${Math.random().toString(36).slice(2, 6).toUpperCase()}`;
+
+    // ===== 定时发送：名单/文案当场冻结存库，不调企微；到点由 cron 自动提交 =====
+    if (scheduledDate) {
+      const groupTask = await this.prisma.wecomGroupMessageTask.create({
+        data: {
+          taskNo,
+          monitoringTaskId: null,
+          createdBySalesId: params.operatorId,
+          templateType: MessageTemplateType.CUSTOM,
+          finalContent: content.trim(),
+          finalUrl: url,
+          entryType: 'live',
+          status: GroupMessageStatus.SCHEDULED,
+          scheduledAt: scheduledDate,
+          totalRecipients: validCustomers.length,
+        },
+      });
+      await this.prisma.wecomGroupMessageRecipient.createMany({
+        data: validCustomers.map((c) => ({
+          messageTaskId: groupTask.id,
+          customerId: c.id,
+          externalUserid: c.externalUserid!,
+        })),
+        skipDuplicates: true,
+      });
+      await this.audit.log({
+        userId: params.operatorId,
+        action: 'quick_send_scheduled',
+        targetType: 'message_task',
+        targetId: groupTask.id,
+        detail: JSON.stringify({ recipients: validCustomers.length, scheduledAt: scheduledDate.toISOString() }),
+      });
+      return { messageTask: groupTask, scheduled: true };
+    }
 
     // 先调企微 API（同步创建任务，通常 2-5 秒返回 msgid）。
     // 成功后再写数据库——避免 DB 写了但企微没发的半残状态。
@@ -527,6 +578,118 @@ export class ReminderService {
     });
 
     return { messageTask: groupTask };
+  }
+
+  /**
+   * 定时任务到点执行（由 cron 每分钟调用）：
+   * 把冻结的名单/文案提交企微，成功后状态转 PENDING_CONFIRM（销售手机确认）。
+   * 失败自动重试，最多 3 次；仍失败标记 FAILED 并记录原因。
+   */
+  async executeScheduledTask(taskId: number): Promise<{ ok: boolean; error?: string }> {
+    const task = await this.prisma.wecomGroupMessageTask.findUnique({
+      where: { id: taskId },
+    });
+    if (!task || task.status !== GroupMessageStatus.SCHEDULED) {
+      return { ok: true }; // 已取消/已执行，幂等跳过
+    }
+
+    // 执行前重新校验名单：客户已删除或已不在该销售名下的跳过
+    const recipients = await this.prisma.wecomGroupMessageRecipient.findMany({
+      where: { messageTaskId: taskId },
+      select: { customerId: true },
+    });
+    const validCustomers = await this.prisma.customer.findMany({
+      where: {
+        id: { in: recipients.map((r) => r.customerId) },
+        isDeleted: false,
+        externalUserid: { not: '' },
+        relations: {
+          some: { salesUserId: task.createdBySalesId, status: 'active' },
+        },
+      },
+      select: { id: true, externalUserid: true },
+    });
+    const extIds = validCustomers.map((c) => c.externalUserid!).filter(Boolean);
+
+    if (extIds.length === 0) {
+      const msg = '定时执行时名单中已无有效客户（均已删除或不在该销售名下）';
+      await this.prisma.wecomGroupMessageTask.update({
+        where: { id: taskId },
+        data: { status: GroupMessageStatus.FAILED, scheduleError: msg },
+      });
+      this.logger.error(`[定时发送] 任务#${taskId} 执行失败：${msg}`);
+      return { ok: false, error: msg };
+    }
+
+    try {
+      const wecomResult = await this.wecomGroup.submitToWecomDraft(
+        task.createdBySalesId,
+        task.finalContent,
+        task.finalUrl || '',
+        extIds,
+        '点击进入',
+      );
+      await this.prisma.wecomGroupMessageTask.update({
+        where: { id: taskId },
+        data: {
+          status: GroupMessageStatus.PENDING_CONFIRM,
+          wecomMsgid: wecomResult.msgid,
+          wecomCreatedAt: new Date(),
+          totalRecipients: extIds.length,
+          failList: wecomResult.failList ? JSON.stringify(wecomResult.failList) : null,
+          sentFailCount: wecomResult.failList?.length ?? 0,
+          scheduleError: null,
+        },
+      });
+      await this.audit.log({
+        userId: task.createdBySalesId,
+        action: 'scheduled_send_executed',
+        targetType: 'message_task',
+        targetId: taskId,
+        detail: JSON.stringify({ recipients: extIds.length }),
+      });
+      this.logger.log(`[定时发送] 任务#${taskId} 已提交企微（${extIds.length} 人），待销售手机确认`);
+      return { ok: true };
+    } catch (e: any) {
+      const attempts = task.scheduleAttempts + 1;
+      const msg = String(e?.message ?? e).slice(0, 400);
+      const giveUp = attempts >= 3;
+      await this.prisma.wecomGroupMessageTask.update({
+        where: { id: taskId },
+        data: {
+          scheduleAttempts: attempts,
+          scheduleError: msg,
+          ...(giveUp ? { status: GroupMessageStatus.FAILED } : {}),
+        },
+      });
+      this.logger.error(
+        `[定时发送] 任务#${taskId} 第 ${attempts} 次提交失败${giveUp ? '，已达上限标记失败' : '，下分钟重试'}: ${msg}`,
+      );
+      return { ok: false, error: msg };
+    }
+  }
+
+  /** 取消尚未到点的定时发送任务（销售本人操作） */
+  async cancelScheduledTask(taskId: number, operatorId: number) {
+    const task = await this.prisma.wecomGroupMessageTask.findUnique({
+      where: { id: taskId },
+    });
+    if (!task) throw new BadRequestException('任务不存在');
+    if (task.createdBySalesId !== operatorId) throw new BadRequestException('无权操作');
+    if (task.status !== GroupMessageStatus.SCHEDULED) {
+      throw new BadRequestException('该任务不是待发送状态，无法取消');
+    }
+    await this.prisma.wecomGroupMessageTask.update({
+      where: { id: taskId },
+      data: { status: GroupMessageStatus.STOPPED },
+    });
+    await this.audit.log({
+      userId: operatorId,
+      action: 'cancel_scheduled_send',
+      targetType: 'message_task',
+      targetId: taskId,
+    });
+    return { ok: true };
   }
 
   // ============ 模板 ============

@@ -120,6 +120,35 @@ export class SyncSchedulerService implements OnApplicationBootstrap {
     }
   }
 
+  /** 定时群发巡检是否正在跑（防止上一轮还没结束下一轮又起） */
+  private scheduledSendRunning = false;
+
+  /** 每 1 分钟巡检：到点的定时群发任务自动提交企微 */
+  @Cron(CronExpression.EVERY_MINUTE, { name: 'scheduled-send' })
+  async cronScheduledSend() {
+    if (this.scheduledSendRunning) return;
+    this.scheduledSendRunning = true;
+    try {
+      const due = await this.prisma.wecomGroupMessageTask.findMany({
+        where: { status: 'SCHEDULED', scheduledAt: { lte: new Date() } },
+        orderBy: { scheduledAt: 'asc' },
+        take: 20,
+        select: { id: true },
+      });
+      for (const t of due) {
+        try {
+          await this.reminder.executeScheduledTask(t.id);
+        } catch (e) {
+          this.logger.error(`[Cron] 定时发送任务#${t.id} 异常: ${(e as Error).message}`);
+        }
+      }
+    } catch (e) {
+      this.logger.error(`[Cron] 定时发送巡检失败: ${(e as Error).message}`);
+    } finally {
+      this.scheduledSendRunning = false;
+    }
+  }
+
   /** 每 10 分钟刷新未结束群发任务状态 */
   @Cron(CronExpression.EVERY_10_MINUTES, { name: 'refresh-groupmsg' })
   async cronRefreshGroupMsg() {

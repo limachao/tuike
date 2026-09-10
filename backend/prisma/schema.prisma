@@ -367,6 +367,7 @@ model ReplayWatchRecord {
 
 enum GroupMessageStatus {
   DRAFT            // 草稿
+  SCHEDULED        // 定时发送：等待到点自动提交企微
   PENDING_CONFIRM  // 待销售确认
   EXECUTED         // 销售已执行
   PARTIAL_SUCCESS  // 部分成功
@@ -418,6 +419,10 @@ model WecomGroupMessageTask {
   sentSuccessCount  Int                @default(0)
   sentFailCount     Int                @default(0)
   failList          String?            @db.Text // JSON
+  // 定时发送（快捷群发可选）：到点由后端 cron 自动提交企微
+  scheduledAt       DateTime?          // 计划提交企微的时间
+  scheduleAttempts  Int                @default(0) // 到点后提交企微的重试次数
+  scheduleError     String?            @db.VarChar(500) // 多次重试仍失败的原因
   // 状态
   status            GroupMessageStatus @default(DRAFT)
   salesConfirmedAt  DateTime?

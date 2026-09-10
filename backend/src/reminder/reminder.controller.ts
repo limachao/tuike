@@ -75,10 +75,20 @@ export class ReminderController {
       url?: string;
       customerIds: number[];
       linkTitle?: string;
+      scheduledAt?: string;
     },
     @CurrentUser() u: JwtUserPayload,
   ) {
     return this.reminder.quickSend({ ...body, operatorId: u.sub });
+  }
+
+  /** 取消尚未到点的定时群发任务 */
+  @Post('quick-send/:id/cancel')
+  cancelScheduled(
+    @Param('id') id: string,
+    @CurrentUser() u: JwtUserPayload,
+  ) {
+    return this.reminder.cancelScheduledTask(Number(id), u.sub);
   }
 
   // ============ 任务状态 ============

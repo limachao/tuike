@@ -53,8 +53,13 @@ export default function ReminderTaskDetailPage() {
           <button onClick={refresh} disabled={loading} className="btn-ghost">
             {loading ? '刷新中…' : '↻ 同步企业微信状态'}
           </button>
-          {task.status !== 'STOPPED' && task.status !== 'ALL_SUCCESS' && task.status !== 'FAILED' && (
+          {task.status !== 'STOPPED' && task.status !== 'ALL_SUCCESS' && task.status !== 'FAILED' && task.status !== 'SCHEDULED' && (
             <button onClick={stop} className="btn-danger">停止任务</button>
+          )}
+          {task.status === 'SCHEDULED' && (
+            <span className="btn-ghost !text-sky-300 cursor-default">
+              ⏰ 待定时发送（{new Date(task.scheduledAt).toLocaleString('zh-CN', { hour12: false })}），请到提醒任务列表取消
+            </span>
           )}
         </div>
       </div>

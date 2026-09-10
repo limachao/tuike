@@ -33,7 +33,14 @@ export default function QuickSendPage() {
   const [addFrom, setAddFrom] = useState('');
   const [addTo, setAddTo] = useState('');
   const [listenFilter, setListenFilter] = useState<'all' | ListenStatus>('all');
-  const [tagFilter, setTagFilter] = useState('');
+  /** 第一排「客户标签」：点亮的标签 = 直接勾选对应客户（可多选，取并集） */
+  const [activeTags, setActiveTags] = useState<Set<string>>(new Set());
+  /** 第二排「过滤标签」：点亮后命中的客户强制不推送（自动取消勾选且不可选） */
+  const [excludeVIP, setExcludeVIP] = useState(false);
+  const [excludeListened, setExcludeListened] = useState(false);
+  /** 发送方式：now=立即提交企微 / scheduled=定时到点自动提交 */
+  const [sendMode, setSendMode] = useState<'now' | 'scheduled'>('now');
+  const [scheduleTime, setScheduleTime] = useState(''); // datetime-local 格式
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [sending, setSending] = useState(false);
   const [loaded, setLoaded] = useState(false);
@@ -103,10 +110,29 @@ export default function QuickSendPage() {
         if (to && t > to) return false;
       }
       if (listenFilter !== 'all' && listenStatus(c.listenSec ?? 0) !== listenFilter) return false;
-      if (tagFilter && !((c.wecomTags ?? []) as string[]).includes(tagFilter)) return false;
       return true;
     });
-  }, [customers, keyword, addFrom, addTo, listenFilter, tagFilter]);
+  }, [customers, keyword, addFrom, addTo, listenFilter]);
+
+  const customerById = useMemo(
+    () => new Map<number, any>(customers.map((c) => [c.id, c])),
+    [customers],
+  );
+
+  /** VIP：企微标签名正好是 VIP（忽略大小写和首尾空格） */
+  const isVIP = (c: any) =>
+    ((c?.wecomTags ?? []) as string[]).some((t) => String(t).trim().toUpperCase() === 'VIP');
+
+  /** 命中「过滤标签」任一规则的客户：不推送（勾选被拦截、全选跳过、行置灰） */
+  const isExcluded = (c: any) =>
+    (excludeVIP && isVIP(c)) || (excludeListened && (c?.listenSec ?? 0) > 0);
+
+  /** 第二排过滤标签上的人数统计（全部客户口径） */
+  const vipCount = useMemo(() => customers.filter(isVIP).length, [customers]);
+  const listenedCount = useMemo(
+    () => customers.filter((c) => (c.listenSec ?? 0) > 0).length,
+    [customers],
+  );
 
   /** 选中直播课程 → 填入追踪链接 + 默认文案 */
   const fillLive = (id: number) => {
@@ -126,32 +152,68 @@ export default function QuickSendPage() {
     }
   };
 
-  // 选中的人里，听课超过阈值会被一键移除
-  const overThresholdSelected = useMemo(() => {
-    const map = new Map(customers.map((c) => [c.id, c.listenSec ?? 0]));
-    return [...selected].filter((id) => (map.get(id) ?? 0) > LISTEN_THRESHOLD_MIN * 60).length;
-  }, [selected, customers]);
-
+  /** 单个勾选：被过滤标签排除的客户不允许选 */
   const toggle = (id: number) => {
+    const c = customerById.get(id);
+    if (c && isExcluded(c)) return;
     const s = new Set(selected);
     if (s.has(id)) s.delete(id); else s.add(id);
     setSelected(s);
   };
 
+  /** 全选当前可见列表（搜索/日期/听课状态筛选后），自动跳过被排除的人 */
   const toggleAll = () => {
-    if (selected.size === filteredCustomers.length && filteredCustomers.length > 0) setSelected(new Set());
-    else setSelected(new Set(filteredCustomers.map((c) => c.id)));
+    const selectable = filteredCustomers.filter((c) => !isExcluded(c));
+    const allSelected = selectable.length > 0 && selectable.every((c) => selected.has(c.id));
+    if (allSelected) setSelected(new Set());
+    else setSelected(new Set(selectable.map((c) => c.id)));
   };
 
-  /** 一键移除已选中、且累计听课时长 > 阈值 的客户 */
-  const removeHeavyListeners = () => {
-    const map = new Map(customers.map((c) => [c.id, c.listenSec ?? 0]));
-    const kept = [...selected].filter((id) => (map.get(id) ?? 0) <= LISTEN_THRESHOLD_MIN * 60);
-    const removed = selected.size - kept.length;
-    setSelected(new Set(kept));
-    alert(removed > 0
-      ? `已从已选中移除 ${removed} 位听课超过 ${LISTEN_THRESHOLD_MIN} 分钟的客户`
-      : `已选中的人里没有听课超过 ${LISTEN_THRESHOLD_MIN} 分钟的`);
+  /**
+   * 第一排标签点击：点亮 = 勾选该标签下的可见客户（可多选取并集，自动跳过被排除的人）；
+   * 熄灭 = 取消该批，但仍被其他点亮标签覆盖的客户保留勾选。
+   */
+  const toggleTagChip = (tag: string) => {
+    const turningOn = !activeTags.has(tag);
+    const nextTags = new Set(activeTags);
+    if (turningOn) nextTags.add(tag); else nextTags.delete(tag);
+    setActiveTags(nextTags);
+    setSelected((prev) => {
+      const s = new Set(prev);
+      for (const c of filteredCustomers) {
+        const tags = (c.wecomTags ?? []) as string[];
+        if (!tags.includes(tag)) continue;
+        if (turningOn) {
+          if (!isExcluded(c)) s.add(c.id);
+        } else if (![...nextTags].some((t) => tags.includes(t))) {
+          s.delete(c.id);
+        }
+      }
+      return s;
+    });
+  };
+
+  /** 第二排过滤开关：点亮的瞬间把已选中的命中客户立即剔除 */
+  const toggleExcludeVIP = () => {
+    const next = !excludeVIP;
+    setExcludeVIP(next);
+    if (next) {
+      setSelected((prev) => new Set([...prev].filter((id) => {
+        const c = customerById.get(id);
+        return c ? !isVIP(c) : true;
+      })));
+    }
+  };
+
+  const toggleExcludeListened = () => {
+    const next = !excludeListened;
+    setExcludeListened(next);
+    if (next) {
+      setSelected((prev) => new Set([...prev].filter((id) => {
+        const c = customerById.get(id);
+        return c ? (c.listenSec ?? 0) <= 0 : true;
+      })));
+    }
   };
 
   const clearDateFilter = () => { setAddFrom(''); setAddTo(''); };
@@ -160,16 +222,41 @@ export default function QuickSendPage() {
     if (!content.trim()) { alert('请输入文案'); return; }
     if (withUrl && !url.trim()) { alert('请输入网址'); return; }
     if (selected.size === 0) { alert('请至少选择一位客户'); return; }
-    if (!confirm(`确定发送给 ${selected.size} 位客户吗？\n\n销售需要在企业微信手机端确认后，客户才会收到消息。`)) return;
+
+    // 定时发送：校验时间（至少 2 分钟后）
+    let scheduledIso = '';
+    let scheduleLabel = '';
+    if (sendMode === 'scheduled') {
+      if (!scheduleTime) { alert('请选择定时发送时间'); return; }
+      const d = dayjs(scheduleTime);
+      if (!d.isValid()) { alert('定时时间格式不正确'); return; }
+      if (d.valueOf() - Date.now() < 2 * 60 * 1000) {
+        alert('定时发送时间至少要在 2 分钟之后');
+        return;
+      }
+      scheduledIso = d.toISOString();
+      scheduleLabel = d.format('M月D日 HH:mm');
+    }
+
+    const confirmMsg = sendMode === 'scheduled'
+      ? `确定设定定时发送吗？\n\n将于 ${scheduleLabel} 自动提交给 ${selected.size} 位客户。\n到点后你仍需在企业微信手机端点「发送」，客户才会收到。`
+      : `确定发送给 ${selected.size} 位客户吗？\n\n销售需要在企业微信手机端确认后，客户才会收到消息。`;
+    if (!confirm(confirmMsg)) return;
     setSending(true);
     try {
       const { data } = await api.post('/reminder/quick-send', {
         content: content.trim(),
         url: withUrl ? url.trim() : '',
         customerIds: [...selected],
+        scheduledAt: scheduledIso || undefined,
       });
-      alert(`已创建群发任务 #${data.messageTask.id}！\n请到企业微信手机端确认发送。`);
-      nav(`/reminders/${data.messageTask.id}`);
+      if (sendMode === 'scheduled') {
+        alert(`已设定定时发送！\n将于 ${scheduleLabel} 自动提交，届时请到企业微信手机端确认发送。\n发送前可在「提醒任务」里取消。`);
+        nav('/reminders');
+      } else {
+        alert(`已创建群发任务 #${data.messageTask.id}！\n请到企业微信手机端确认发送。`);
+        nav(`/reminders/${data.messageTask.id}`);
+      }
     } catch (e: any) {
       const msg = e?.response?.data?.message ?? e?.message ?? '发送失败，请重试';
       // 超时或网络异常时，后端可能已成功但前端没收到响应——引导用户查任务列表确认
@@ -310,34 +397,72 @@ export default function QuickSendPage() {
                   </button>
                 ))}
               </div>
-              {/* 企微标签筛选（客户在企微后台被打的标签） */}
-              {allTags.length > 0 && (
-                <select
-                  className="input !py-1.5 !px-2 text-xs w-36"
-                  value={tagFilter}
-                  onChange={(e) => setTagFilter(e.target.value)}
-                >
-                  <option value="">企微标签：全部</option>
-                  {allTags.map(([t, n]) => (
-                    <option key={t} value={t}>{t}（{n}人）</option>
-                  ))}
-                </select>
-              )}
               <div className="flex-1" />
-              <button
-                onClick={removeHeavyListeners}
-                disabled={overThresholdSelected === 0}
-                className={`btn-ghost !py-2 text-xs whitespace-nowrap ${
-                  overThresholdSelected > 0 ? '!text-accent-amber !border-accent-amber/40' : 'opacity-50'
-                }`}
-                title={`从已选中移除听课超过 ${LISTEN_THRESHOLD_MIN} 分钟的客户`}
-              >
-                ⚡ 去掉听课&gt;{LISTEN_THRESHOLD_MIN}分钟
-                {overThresholdSelected > 0 && <span className="ml-1 chip !py-0 !text-[10px] !text-accent-amber">{overThresholdSelected}</span>}
-              </button>
               <button onClick={toggleAll} className="btn-ghost !py-2 text-xs whitespace-nowrap">
-                {selected.size === filteredCustomers.length && filteredCustomers.length > 0 ? '取消全选' : '全选'}
+                {filteredCustomers.some((c) => !isExcluded(c) && !selected.has(c.id)) ? '全选' : '取消全选'}
               </button>
+
+              {/* 第一排：客户标签 —— 点亮标签直接勾选该批客户（可多选，取并集；被过滤的人自动跳过） */}
+              <div className="w-full pt-1">
+                <div className="text-[11px] text-text-tertiary mb-1.5">
+                  客户标签<span className="ml-1 text-text-tertiary/70">（点亮标签 = 直接选中该批客户，可叠加多个）</span>
+                </div>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {allTags.length === 0 && (
+                    <span className="text-xs text-text-tertiary">暂无企微标签</span>
+                  )}
+                  {allTags.map(([t, n]) => {
+                    const active = activeTags.has(t);
+                    return (
+                      <button
+                        key={t}
+                        onClick={() => toggleTagChip(t)}
+                        className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full border text-xs whitespace-nowrap transition-colors ${
+                          active
+                            ? 'border-brand-500/60 bg-brand-500/15 text-brand-200'
+                            : 'border-white/10 bg-white/5 text-text-secondary hover:border-white/25'
+                        }`}
+                      >
+                        {active ? '✓ ' : ''}{t}
+                        <span className={`text-[10px] ${active ? 'text-brand-300' : 'text-text-tertiary'}`}>{n}人</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* 第二排：过滤标签 —— 点亮后命中的客户不推送（自动取消勾选，且勾不上、全选跳过） */}
+              <div className="w-full">
+                <div className="text-[11px] text-text-tertiary mb-1.5">
+                  过滤标签<span className="ml-1 text-red-300/80">（点亮后，命中的客户不会收到消息）</span>
+                </div>
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <button
+                    onClick={toggleExcludeVIP}
+                    className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full border text-xs whitespace-nowrap transition-colors ${
+                      excludeVIP
+                        ? 'border-red-500/60 bg-red-500/15 text-red-200'
+                        : 'border-white/10 bg-white/5 text-text-secondary hover:border-white/25'
+                    }`}
+                    title="按企微标签名 VIP 匹配（忽略大小写）"
+                  >
+                    🚫 VIP{excludeVIP ? '·已排除' : ''}
+                    <span className={`text-[10px] ${excludeVIP ? 'text-red-300' : 'text-text-tertiary'}`}>{vipCount}人</span>
+                  </button>
+                  <button
+                    onClick={toggleExcludeListened}
+                    className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full border text-xs whitespace-nowrap transition-colors ${
+                      excludeListened
+                        ? 'border-red-500/60 bg-red-500/15 text-red-200'
+                        : 'border-white/10 bg-white/5 text-text-secondary hover:border-white/25'
+                    }`}
+                    title="飞策听课时长 > 0 即视为已听课"
+                  >
+                    🚫 已听课{excludeListened ? '·已排除' : ''}
+                    <span className={`text-[10px] ${excludeListened ? 'text-red-300' : 'text-text-tertiary'}`}>{listenedCount}人</span>
+                  </button>
+                </div>
+              </div>
             </div>
 
             <div
@@ -364,13 +489,16 @@ export default function QuickSendPage() {
                     <tr><td colSpan={5} className="text-center py-12 text-text-tertiary">
                       {loaded ? '暂无客户，试试调整搜索或日期筛选' : '加载中…'}
                     </td></tr>
-                  ) : filteredCustomers.slice(0, visibleCount).map((c) => (
-                    <tr key={c.id} className="border-t border-glass-border hover:bg-white/[0.02]">
+                  ) : filteredCustomers.slice(0, visibleCount).map((c) => {
+                    const excluded = isExcluded(c);
+                    return (
+                    <tr key={c.id} className={`border-t border-glass-border hover:bg-white/[0.02] ${excluded ? 'opacity-45' : ''}`}>
                       <td className="py-2 pr-3">
                         <input
                           type="checkbox"
                           className="w-4 h-4"
                           checked={selected.has(c.id)}
+                          disabled={excluded}
                           onChange={() => toggle(c.id)}
                         />
                       </td>
@@ -391,6 +519,13 @@ export default function QuickSendPage() {
                               </span>
                             );
                           })()}
+                          {/* 命中过滤标签：红色「不推送」标记 */}
+                          {excluded && (
+                            <span className="inline-flex items-center px-1.5 py-0.5 rounded-md border border-red-500/40 bg-red-500/10 text-red-300 text-[10px] leading-4 whitespace-nowrap">
+                              不推送{excludeVIP && isVIP(c) ? '·VIP' : ''}
+                              {excludeListened && (c.listenSec ?? 0) > 0 ? '·已听课' : ''}
+                            </span>
+                          )}
                           {((c.wecomTags ?? []) as string[]).slice(0, 2).map((t) => (
                             <span
                               key={t}
@@ -416,12 +551,16 @@ export default function QuickSendPage() {
                         {c.remarkMobiles || '—'}
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
             <div className="text-xs text-text-tertiary pt-1">
               共 {filteredCustomers.length} 人 · 已选 {selected.size} 人
+              {filteredCustomers.filter(isExcluded).length > 0 && (
+                <span className="ml-2 text-red-300/90">· 不推送 {filteredCustomers.filter(isExcluded).length} 人</span>
+              )}
               {filteredCustomers.length > visibleCount && <span className="ml-2">（滚动加载更多）</span>}
               <span className="ml-3 text-[11px]">听课时长来自飞策直播+回放记录（未匹配身份的学员暂计 0，微信认证后自动补全）</span>
             </div>
@@ -471,22 +610,60 @@ export default function QuickSendPage() {
               </ul>
             </div>
 
+            {/* 发送方式切换：立即 / 定时 */}
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                onClick={() => setSendMode('now')}
+                className={`btn-ghost !py-2 text-xs whitespace-nowrap ${
+                  sendMode === 'now' ? '!border-brand-500/60 !text-brand-300 bg-brand-500/10' : ''
+                }`}
+              >
+                ⚡ 立即发送
+              </button>
+              <button
+                onClick={() => setSendMode('scheduled')}
+                className={`btn-ghost !py-2 text-xs whitespace-nowrap ${
+                  sendMode === 'scheduled' ? '!border-brand-500/60 !text-brand-300 bg-brand-500/10' : ''
+                }`}
+              >
+                ⏰ 定时发送
+              </button>
+            </div>
+            {sendMode === 'scheduled' && (
+              <div className="space-y-1.5 -mt-1">
+                <input
+                  type="datetime-local"
+                  className="input text-sm"
+                  value={scheduleTime}
+                  min={dayjs().add(2, 'minute').format('YYYY-MM-DDTHH:mm')}
+                  onChange={(e) => setScheduleTime(e.target.value)}
+                />
+                <div className="text-[11px] text-text-tertiary">
+                  到点系统自动提交企微，你仍需在手机端点「发送」；发送前可在提醒任务里取消
+                </div>
+              </div>
+            )}
+
             <div className="space-y-2">
               <button
                 onClick={() => send(false)}
-                disabled={sending || !content.trim() || selected.size === 0}
+                disabled={sending || !content.trim() || selected.size === 0 || (sendMode === 'scheduled' && !scheduleTime)}
                 className="btn-primary w-full"
-                title={!content.trim() ? '请先输入文案' : selected.size === 0 ? '请先选择客户' : ''}
+                title={!content.trim() ? '请先输入文案' : selected.size === 0 ? '请先选择客户' : sendMode === 'scheduled' && !scheduleTime ? '请先选择定时时间' : ''}
               >
-                {sending ? '正在提交…' : `✉ 只发文案（${selected.size} 位客户）`}
+                {sending ? '正在提交…' : sendMode === 'scheduled'
+                  ? `⏰ 定时·只发文案（${selected.size} 位客户）`
+                  : `✉ 只发文案（${selected.size} 位客户）`}
               </button>
               <button
                 onClick={() => send(true)}
-                disabled={sending || !content.trim() || !url.trim() || selected.size === 0}
+                disabled={sending || !content.trim() || !url.trim() || selected.size === 0 || (sendMode === 'scheduled' && !scheduleTime)}
                 className="btn-ghost w-full"
-                title={!url.trim() ? '请先在下方输入网址' : !content.trim() ? '请先输入文案' : selected.size === 0 ? '请先选择客户' : ''}
+                title={!url.trim() ? '请先在下方输入网址' : !content.trim() ? '请先输入文案' : selected.size === 0 ? '请先选择客户' : sendMode === 'scheduled' && !scheduleTime ? '请先选择定时时间' : ''}
               >
-                {sending ? '正在提交…' : `🔗 文案 + 网址（${selected.size} 位客户）`}
+                {sending ? '正在提交…' : sendMode === 'scheduled'
+                  ? `⏰ 定时·文案 + 网址（${selected.size} 位客户）`
+                  : `🔗 文案 + 网址（${selected.size} 位客户）`}
               </button>
             </div>
           </div>
