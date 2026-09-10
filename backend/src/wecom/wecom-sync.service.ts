@@ -159,7 +159,9 @@ export class WecomSyncService {
       let cursor: string | undefined;
       const seenExternalUserids = new Set<string>();
       const rows: CustomerSyncRow[] = [];
-      // 收集需要补调 get 的客户（批量接口的 tag_id 里有标签库找不到的个人标签）
+      // 企微官方行为：batch/get_by_user 的 follow_info 只会返回企业标签的 tag_id，
+      // 个人标签完全不返回。只有 externalcontact/get 单查才返回完整 tags 数组。
+      // 所以必须对所有客户补调一次 get，拿到完整的 follow_info.tags（含个人标签）。
       const needRefetch: Array<{ externalUserid: string; item: any }> = [];
       do {
         const { list, nextCursor } = await this.api.getCustomersByUser(
@@ -171,34 +173,36 @@ export class WecomSyncService {
           if (!externalUserid) continue;
           seenExternalUserids.add(externalUserid);
           const row = this.extractCustomerRow(externalUserid, item, tm);
-          // 检测：follow_info.tag_id 里有没有 tagMap 找不到的 id（= 个人标签）
-          const fi = item?.follow_info;
-          const unknownIds = (fi?.tag_id ?? []).filter(
-            (id: string) => tm && !tm.has(String(id)),
-          );
-          if (unknownIds.length > 0) {
-            needRefetch.push({ externalUserid, item });
-          }
+          needRefetch.push({ externalUserid, item });
           rows.push(row);
           total++;
         }
         cursor = nextCursor;
       } while (cursor);
 
-      // 批量接口只返回 tag_id（无 name），标签库又不含个人标签
-      // 对有未知 tag_id 的客户补调 externalcontact/get（返回的 follow_info.tags 带 name+group）
+      // 并发补调 get 接口（每批 10 个，避免触发企微限流）
       if (needRefetch.length > 0) {
         this.logger.log(
-          `[WeCom同步] 销售#${salesId} 有 ${needRefetch.length} 个客户含未映射的个人标签，补调 get 接口`,
+          `[WeCom同步] 销售#${salesId} 开始补调 get 接口获取完整标签（${needRefetch.length} 个客户）`,
         );
         let refetched = 0;
-        for (const { externalUserid, item } of needRefetch) {
-          try {
-            const detail = await this.api.getCustomerDetail(externalUserid);
-            if (detail?.follow_info?.tags?.length) {
-              // 用 get 返回的完整 follow_info.tags 覆盖批量数据
+        const BATCH = 10;
+        for (let i = 0; i < needRefetch.length; i += BATCH) {
+          const batch = needRefetch.slice(i, i + BATCH);
+          const results = await Promise.allSettled(
+            batch.map(async ({ externalUserid, item }) => {
+              const detail = await this.api.getCustomerDetail(externalUserid);
+              if (detail?.follow_info?.tags?.length) {
+                return { externalUserid, item, detail };
+              }
+              return null;
+            }),
+          );
+          for (const r of results) {
+            if (r.status === 'fulfilled' && r.value) {
+              const { externalUserid, item, detail } = r.value;
               const idx = rows.findIndex(
-                (r) => r.externalUserid === externalUserid,
+                (row) => row.externalUserid === externalUserid,
               );
               if (idx >= 0) {
                 rows[idx] = this.extractCustomerRow(externalUserid, {
@@ -208,12 +212,10 @@ export class WecomSyncService {
                 refetched++;
               }
             }
-          } catch {
-            // 单个失败不影响整体
           }
         }
         this.logger.log(
-          `[WeCom同步] 销售#${salesId} 补调成功 ${refetched}/${needRefetch.length}`,
+          `[WeCom同步] 销售#${salesId} get 补调完成：有标签 ${refetched}/${needRefetch.length}`,
         );
       }
       // 批量落库：每 500 人一批，3 条 SQL 顶过去 ~1500 条逐条查询
