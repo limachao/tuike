@@ -92,8 +92,8 @@ export default function QuickSendPage() {
     return [...m.entries()].sort((a, b) => b[1] - a[1]);
   }, [customers]);
 
-  /** 本地筛选：昵称/手机号关键词 + 加入企微日期区间 + 听课状态 + 企微标签 */
-  const filteredCustomers = useMemo(() => {
+  /** 基础筛选：昵称/手机号关键词 + 加入企微日期区间 + 听课状态（不含标签） */
+  const baseFiltered = useMemo(() => {
     const kw = keyword.trim().toLowerCase();
     const from = addFrom ? dayjs(addFrom).startOf('day').valueOf() : null;
     const to = addTo ? dayjs(addTo).endOf('day').valueOf() : null;
@@ -113,6 +113,17 @@ export default function QuickSendPage() {
       return true;
     });
   }, [customers, keyword, addFrom, addTo, listenFilter]);
+
+  /**
+   * 最终列表：基础筛选之上，点亮了客户标签时只显示命中任一选中标签的客户，
+   * 其他客户全部隐藏（标签同时决定勾选与列表可见范围）。
+   */
+  const filteredCustomers = useMemo(() => {
+    if (activeTags.size === 0) return baseFiltered;
+    return baseFiltered.filter((c) =>
+      ((c.wecomTags ?? []) as string[]).some((t) => activeTags.has(t)),
+    );
+  }, [baseFiltered, activeTags]);
 
   const customerById = useMemo(
     () => new Map<number, any>(customers.map((c) => [c.id, c])),
@@ -180,7 +191,9 @@ export default function QuickSendPage() {
     setActiveTags(nextTags);
     setSelected((prev) => {
       const s = new Set(prev);
-      for (const c of filteredCustomers) {
+      // 注意：遍历「基础筛选」结果（不含标签筛选），
+      // 否则点亮新标签时列表还停留在旧标签的范围里，新标签的客户选不进来
+      for (const c of baseFiltered) {
         const tags = (c.wecomTags ?? []) as string[];
         if (!tags.includes(tag)) continue;
         if (turningOn) {
@@ -405,7 +418,7 @@ export default function QuickSendPage() {
               {/* 第一排：客户标签 —— 点亮标签直接勾选该批客户（可多选，取并集；被过滤的人自动跳过） */}
               <div className="w-full pt-1">
                 <div className="text-[11px] text-text-tertiary mb-1.5">
-                  客户标签<span className="ml-1 text-text-tertiary/70">（点亮标签 = 直接选中该批客户，可叠加多个）</span>
+                  客户标签<span className="ml-1 text-text-tertiary/70">（点亮后列表只显示这批客户并自动勾选，可叠加多个）</span>
                 </div>
                 <div className="flex flex-wrap items-center gap-1.5">
                   {allTags.length === 0 && (
@@ -487,7 +500,7 @@ export default function QuickSendPage() {
                 <tbody>
                   {filteredCustomers.length === 0 ? (
                     <tr><td colSpan={5} className="text-center py-12 text-text-tertiary">
-                      {loaded ? '暂无客户，试试调整搜索或日期筛选' : '加载中…'}
+                      {loaded ? '暂无客户，试试调整搜索、日期或标签筛选' : '加载中…'}
                     </td></tr>
                   ) : filteredCustomers.slice(0, visibleCount).map((c) => {
                     const excluded = isExcluded(c);
