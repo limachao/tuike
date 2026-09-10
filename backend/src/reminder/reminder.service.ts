@@ -382,10 +382,10 @@ export class ReminderService {
   }
 
   /**
-   * 解析 wecom_tags JSON，只返回「推课方舟状态」组的标签名。
+   * 解析 wecom_tags JSON，返回全部企微标签名（含企业公共标签和销售个人标签）。
    *
    * 兼容两种存储格式：
-   *   新格式：[{"name":"需要推课","group":"推课方舟状态"}, ...]
+   *   新格式：[{"name":"意向强","group":"我的标签组"}, ...]
    *   旧格式（升级前）：["24年客户", "王老师抖音", ...] —— 旧格式全部忽略
    */
   private parseTagArray(raw: unknown): string[] {
@@ -397,10 +397,8 @@ export class ReminderService {
         .map((t) => {
           // 新格式：带 group 的对象
           if (t && typeof t === 'object' && 'name' in t && 'group' in t) {
-            const g: string = String((t as any).group ?? '');
             const n: string = String((t as any).name ?? '').trim();
-            // 只保留「推课方舟」相关组的标签（关键字匹配，方便以后组名微调）
-            if (g.includes('推课方舟') && n) return n;
+            if (n) return n;
           }
           return null;
         })
