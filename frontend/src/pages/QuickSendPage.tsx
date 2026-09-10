@@ -46,6 +46,23 @@ export default function QuickSendPage() {
   const [loaded, setLoaded] = useState(false);
   /** 分批渲染：先画 200 行，滚动到底部每次追加 300 行 */
   const [visibleCount, setVisibleCount] = useState(200);
+  /** 标签搜索关键词：输入数字（如 195）或文字即可快速定位标签 */
+  const [tagKeyword, setTagKeyword] = useState('');
+  /** 标签管理模式：开启后每个标签出现「×」可隐藏 */
+  const [tagManage, setTagManage] = useState(false);
+  /** 手动隐藏的标签（只存在本机浏览器 localStorage，后台数据完全不变） */
+  const [hiddenTags, setHiddenTags] = useState<Set<string>>(() => {
+    try {
+      const raw = localStorage.getItem('quicksend:hiddenTags:v1');
+      return new Set<string>(raw ? JSON.parse(raw) : []);
+    } catch {
+      return new Set<string>();
+    }
+  });
+  const persistHiddenTags = (s: Set<string>) => {
+    setHiddenTags(s);
+    try { localStorage.setItem('quicksend:hiddenTags:v1', JSON.stringify([...s])); } catch { /* 忽略无痕模式等异常 */ }
+  };
 
   const loadCustomers = async () => {
     try {
@@ -109,6 +126,33 @@ export default function QuickSendPage() {
     }
     return s.size;
   }, [customers]);
+
+  /** 标签搜索词（忽略大小写/空格） */
+  const tagKw = tagKeyword.trim().toLowerCase();
+  /** 正常展示的标签：未被手动隐藏、命中搜索词 */
+  const visibleTags = useMemo(
+    () => allTags.filter(([t]) => !hiddenTags.has(t) && (!tagKw || t.toLowerCase().includes(tagKw))),
+    [allTags, hiddenTags, tagKw],
+  );
+  /** 管理模式下可恢复的标签：已被手动隐藏且命中搜索词 */
+  const restorableTags = useMemo(
+    () => allTags.filter(([t]) => hiddenTags.has(t) && (!tagKw || t.toLowerCase().includes(tagKw))),
+    [allTags, hiddenTags, tagKw],
+  );
+
+  /** 手动隐藏一个标签：若该标签正点亮，先取消其选中的客户 */
+  const hideTag = (t: string) => {
+    if (activeTags.has(t)) toggleTagChip(t);
+    const next = new Set(hiddenTags);
+    next.add(t);
+    persistHiddenTags(next);
+  };
+  /** 恢复一个已隐藏的标签 */
+  const restoreTag = (t: string) => {
+    const next = new Set(hiddenTags);
+    next.delete(t);
+    persistHiddenTags(next);
+  };
 
   /** 基础筛选：昵称/手机号关键词 + 加入企微日期区间 + 听课状态（不含标签） */
   const baseFiltered = useMemo(() => {
@@ -436,42 +480,110 @@ export default function QuickSendPage() {
               {/* 第一排：客户标签 —— iOS 分组卡片样式；点亮 = 选中该批并收窄列表（可叠加） */}
               <div className="w-full pt-1">
                 <div className="rounded-2xl border border-white/[0.08] bg-white/[0.03] p-3.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]">
-                  <div className="flex items-center justify-between gap-2 mb-2.5">
-                    <span className="text-[11px] font-semibold tracking-wide text-text-secondary">
+                  <div className="flex items-center gap-2 mb-2.5 flex-wrap">
+                    <span className="text-[11px] font-semibold tracking-wide text-text-secondary whitespace-nowrap">
                       🏷️ 客户标签
                     </span>
-                    <span className="text-[10px] text-text-tertiary/80">点亮后列表只显示这批客户并自动勾选，可叠加多个</span>
+                    {/* 标签搜索：输入数字（如 195）或文字快速定位 */}
+                    <input
+                      className="input !py-1 !px-2.5 !text-xs w-36 sm:w-44"
+                      placeholder="搜索标签，如 195"
+                      value={tagKeyword}
+                      onChange={(e) => setTagKeyword(e.target.value)}
+                    />
+                    <button
+                      onClick={() => setTagManage((v) => !v)}
+                      className={`text-[10px] px-2 py-1 rounded-full border whitespace-nowrap transition-colors ${
+                        tagManage
+                          ? 'border-brand-400/60 text-brand-300 bg-brand-500/10'
+                          : 'border-white/10 text-text-tertiary hover:text-text-secondary hover:border-white/25'
+                      }`}
+                    >
+                      {tagManage ? '完成' : '管理标签'}
+                    </button>
+                    <span className="text-[10px] text-text-tertiary/80 ml-auto hidden md:block">
+                      {tagManage ? '点「×」隐藏不常用标签（仅本机生效，后台数据不变）' : '点亮后列表只显示这批客户并自动勾选，可叠加多个'}
+                    </span>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
                     {allTags.length === 0 && (
                       <span className="text-xs text-text-tertiary">暂无企微标签</span>
                     )}
-                    {allTags.map(([t, n]) => {
+                    {allTags.length > 0 && visibleTags.length === 0 && (
+                      <span className="text-xs text-text-tertiary">
+                        {tagKw ? `没有匹配「${tagKeyword.trim()}」的标签` : '标签都被隐藏了，点「管理标签」可恢复'}
+                      </span>
+                    )}
+                    {visibleTags.map(([t, n]) => {
                       const active = activeTags.has(t);
                       return (
-                        <button
-                          key={t}
-                          onClick={() => toggleTagChip(t)}
-                          className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full border text-xs font-medium whitespace-nowrap transition-all duration-150 active:scale-95 ${
-                            active
-                              ? 'border-brand-300/60 bg-gradient-to-b from-brand-400 to-brand-600 text-white shadow-lg shadow-brand-500/30'
-                              : 'border-white/[0.12] bg-white/[0.07] text-text-secondary hover:bg-white/[0.12] hover:border-white/25'
-                          }`}
-                        >
-                          {active && (
-                            <span className="grid place-items-center h-3.5 w-3.5 rounded-full bg-white/25 text-[9px] leading-none">✓</span>
+                        <span key={t} className="inline-flex items-stretch">
+                          <button
+                            onClick={() => toggleTagChip(t)}
+                            className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full border text-xs font-medium whitespace-nowrap transition-all duration-150 active:scale-95 ${
+                              tagManage ? 'rounded-r-none border-r-0' : ''
+                            } ${
+                              active
+                                ? 'border-brand-300/60 bg-gradient-to-b from-brand-400 to-brand-600 text-white shadow-lg shadow-brand-500/30'
+                                : 'border-white/[0.12] bg-white/[0.07] text-text-secondary hover:bg-white/[0.12] hover:border-white/25'
+                            }`}
+                          >
+                            {active && (
+                              <span className="grid place-items-center h-3.5 w-3.5 rounded-full bg-white/25 text-[9px] leading-none">✓</span>
+                            )}
+                            {t}
+                            <span className={`px-1.5 rounded-full text-[10px] leading-4 ${
+                              active ? 'bg-white/20 text-white' : 'bg-black/25 text-text-tertiary'
+                            }`}>{n}人</span>
+                          </button>
+                          {tagManage && (
+                            <button
+                              onClick={() => hideTag(t)}
+                              title="从本页隐藏（后台数据不变）"
+                              className={`inline-flex items-center justify-center w-6 rounded-r-full border text-sm leading-none transition-colors ${
+                                active
+                                  ? 'border-brand-300/60 bg-brand-600 text-white/90 hover:bg-red-500 hover:border-red-400'
+                                  : 'border-white/[0.12] bg-white/[0.07] text-text-tertiary hover:bg-red-500/20 hover:text-red-300 hover:border-red-400/50'
+                              }`}
+                            >
+                              ×
+                            </button>
                           )}
-                          {t}
-                          <span className={`px-1.5 rounded-full text-[10px] leading-4 ${
-                            active ? 'bg-white/20 text-white' : 'bg-black/25 text-text-tertiary'
-                          }`}>{n}人</span>
-                        </button>
+                        </span>
                       );
                     })}
                   </div>
-                  {hiddenChannelTagCount > 0 && (
-                    <div className="mt-2.5 pt-2 border-t border-white/[0.06] text-[10px] text-text-tertiary/70">
-                      已隐藏 {hiddenChannelTagCount} 个渠道来源标签（X老师视频号 / 抖音号等），仅不在此显示，客户资料中照常保留
+                  {/* 管理模式：已隐藏标签的恢复区 */}
+                  {tagManage && restorableTags.length > 0 && (
+                    <div className="mt-2.5 pt-2 border-t border-white/[0.06]">
+                      <div className="text-[10px] text-text-tertiary mb-1.5">已隐藏（仅本机不显示，点「+」恢复）：</div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        {restorableTags.map(([t, n]) => (
+                          <span key={t} className="inline-flex items-stretch opacity-55">
+                            <span className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-l-full border border-white/[0.08] bg-white/[0.03] text-xs text-text-tertiary whitespace-nowrap">
+                              {t}
+                              <span className="px-1.5 rounded-full bg-black/25 text-[10px] leading-4">{n}人</span>
+                            </span>
+                            <button
+                              onClick={() => restoreTag(t)}
+                              title="恢复显示"
+                              className="inline-flex items-center justify-center w-6 rounded-r-full border border-l-0 border-white/[0.08] bg-white/[0.03] text-sm text-text-tertiary hover:bg-emerald-500/20 hover:text-emerald-300 hover:border-emerald-400/50"
+                            >
+                              +
+                            </button>
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  {(!tagManage || restorableTags.length === 0) && (hiddenChannelTagCount > 0 || hiddenTags.size > 0) && (
+                    <div className="mt-2.5 pt-2 border-t border-white/[0.06] space-y-0.5 text-[10px] text-text-tertiary/70">
+                      {hiddenTags.size > 0 && (
+                        <div>已手动隐藏 {hiddenTags.size} 个不常用标签，点「管理标签」可恢复</div>
+                      )}
+                      {hiddenChannelTagCount > 0 && (
+                        <div>已隐藏 {hiddenChannelTagCount} 个渠道来源标签（X老师视频号 / 抖音号等），仅不在此显示，客户资料中照常保留</div>
+                      )}
                     </div>
                   )}
                 </div>
