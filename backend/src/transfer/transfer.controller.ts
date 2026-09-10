@@ -25,8 +25,8 @@ export class TransferController {
   }
 
   @Post('send-sms')
-  sendSms(@Body() body: { mobile: string }) {
-    return this.transfer.sendSmsCode(body.mobile);
+  sendSms(@Body() body: { mobile: string }, @Req() req: any) {
+    return this.transfer.sendSmsCode(body.mobile, req?.ip);
   }
 
   /** 微信服务号 OAuth 跳转地址（未配置返回 configured:false） */

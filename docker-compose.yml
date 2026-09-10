@@ -52,10 +52,10 @@ services:
       WECHAT_OAUTH_SECRET: ${WECHAT_OAUTH_SECRET:-}
       WECHAT_OAUTH_ENABLED: ${WECHAT_OAUTH_ENABLED:-}
       BACKEND_PORT: "3001"
-    # 对外暴露后端端口（给前端反代用）
-    # 但实际上前端是容器内反代，不需要暴露到宿主机
-    ports:
-      - "3001:3001"
+    # 安全：后端端口不暴露到宿主机，外网只能经前端 nginx 反代访问；
+    # 本机调试需要直连时再临时打开下面两行。
+    # ports:
+    #   - "3001:3001"
 
   # ============ 前端页面（Nginx） ============
   frontend:

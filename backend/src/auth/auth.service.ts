@@ -2,12 +2,15 @@ import {
   Injectable,
   UnauthorizedException,
   ConflictException,
+  HttpException,
+  HttpStatus,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
 import { UsersService } from '../users/users.service';
 import { JwtUserPayload } from '../common/decorators/current-user.decorator';
 import { AuditLogService } from '../audit/audit-log.service';
+import { RedisService } from '../common/redis/redis.service';
 import { UserRole } from '@prisma/client';
 
 @Injectable()
@@ -16,10 +19,18 @@ export class AuthService {
     private readonly users: UsersService,
     private readonly jwt: JwtService,
     private readonly audit: AuditLogService,
+    private readonly redis: RedisService,
   ) {}
 
   /** 手机号+密码登录 */
   async login(phone: string, passwordPlain: string, ip?: string, ua?: string) {
+    // 防爆破：同一 IP 每分钟最多 10 次登录尝试
+    if (ip) {
+      const tries = await this.redis.incrWithTtl(`ratelimit:login:ip:${ip}`, 60);
+      if (tries > 10) {
+        throw new HttpException('尝试过于频繁，请一分钟后再试', HttpStatus.TOO_MANY_REQUESTS);
+      }
+    }
     const user = await this.users.findByPhone(phone);
     if (!user || !user.isActive) {
       throw new UnauthorizedException('手机号或密码错误');

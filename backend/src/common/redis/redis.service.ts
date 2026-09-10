@@ -59,6 +59,20 @@ export class RedisService implements OnModuleDestroy {
   }
 
   /**
+   * 计数限流：key 自增并在首次访问时设置过期时间，返回当前计数值。
+   * Redis 异常时返回 0（不阻断业务，限流仅在 Redis 正常时生效）。
+   */
+  async incrWithTtl(key: string, ttlSec: number): Promise<number> {
+    try {
+      const n = await this.client.incr(key);
+      if (n === 1) await this.client.expire(key, ttlSec);
+      return n;
+    } catch (e) {
+      return 0;
+    }
+  }
+
+  /**
    * 分布式锁: SET NX EX, 成功返回 true, 已被占用返回 false
    */
   async tryLock(key: string, ttlSec = 30): Promise<boolean> {

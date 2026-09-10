@@ -92,18 +92,39 @@ export class TransferService {
     };
   }
 
-  /** 发送验证码（简化：开发环境直接返回 123456；生产环境接 SMS） */
-  async sendSmsCode(mobile: string) {
+  /**
+   * 发送验证码（生产环境接 SMS 通道；开发环境固定 123456）。
+   * 限流：同手机号 60 秒 1 条、同一 IP 每小时 10 条，防短信轰炸/刷接口。
+   */
+  async sendSmsCode(mobile: string, clientIp?: string) {
     if (!/^1\d{10}$/.test(mobile)) {
       throw new BadRequestException('手机号格式不正确');
     }
-    // 开发模式：固定 123456
-    const code = process.env.NODE_ENV === 'production'
+    // 同手机号 60 秒内只能发 1 条
+    const perMobile = await this.redis.incrWithTtl(`ratelimit:sms:mobile:${mobile}`, 60);
+    if (perMobile > 1) {
+      throw new BadRequestException('验证码已发送，请 60 秒后再试');
+    }
+    // 同一 IP 每小时最多 10 条
+    if (clientIp) {
+      const perIp = await this.redis.incrWithTtl(`ratelimit:sms:ip:${clientIp}`, 3600);
+      if (perIp > 10) {
+        throw new BadRequestException('请求过于频繁，请稍后再试');
+      }
+    }
+    const isProd = process.env.NODE_ENV === 'production';
+    const code = isProd
       ? Math.floor(100000 + Math.random() * 900000).toString()
       : '123456';
     await this.redis.safeSet(`sms:${mobile}`, code, 300);
-    this.logger.debug(`[SMS] ${mobile} -> ${code}`);
-    return { ok: true, codeInDev: code };
+    if (!isProd) {
+      this.logger.debug(`[SMS] ${mobile} -> ${code}`);
+      // 开发环境直接回传验证码方便联调；生产环境绝不下发
+      return { ok: true, codeInDev: code };
+    }
+    // TODO: 生产环境在此接入真实短信通道（当前未配置时验证码仅存 Redis，登录走微信授权/后四位）
+    this.logger.log(`[SMS] 生产验证码已生成（手机号尾号 ${mobile.slice(-4)}），等待短信通道接入`);
+    return { ok: true };
   }
 
   /**
@@ -122,10 +143,18 @@ export class TransferService {
     messageRecipientId?: number;
   }) {
     if (params.method === 'sms') {
+      // 错误次数锁定：同手机号验证码错 5 次锁 10 分钟，防暴力枚举
+      const lockKey = `sms:fail:${params.mobile}`;
+      const fails = await this.redis.incrWithTtl(lockKey, 600);
+      if (fails > 5) {
+        throw new BadRequestException('验证码错误次数过多，请 10 分钟后再试');
+      }
       const stored = await this.redis.safeGet(`sms:${params.mobile}`);
       if (!stored || stored !== params.code) {
         throw new BadRequestException('验证码错误');
       }
+      // 验证通过：清错误计数 + 删验证码（一次性）
+      await this.redis.get().del(lockKey);
       await this.redis.get().del(`sms:${params.mobile}`);
     }
     const mobileHash = crypto.createHash('sha256').update(params.mobile).digest('hex');
@@ -133,10 +162,11 @@ export class TransferService {
     let customer = await this.prisma.customer.findFirst({
       where: { mobileEncrypted: mobileHash },
     });
-    // 否则通过 remark_mobiles 里是否包含
+    // 否则通过 remark_mobiles 里是否包含（全表模糊匹配，取 1 条即可）
     if (!customer) {
       const all = await this.prisma.customer.findMany({
         where: { remarkMobiles: { contains: params.mobile } },
+        take: 1,
       });
       customer = all[0] ?? null;
     }
@@ -240,6 +270,16 @@ export class TransferService {
     if (!/^\d{4}$/.test(params.suffix)) {
       throw new BadRequestException('请输入手机号后四位');
     }
+    // 限流：后四位仅 1 万种组合，同一 IP 每小时限 30 次尝试，防暴力枚举
+    if (params.clientIp) {
+      const tries = await this.redis.incrWithTtl(
+        `ratelimit:suffix:ip:${params.clientIp}`,
+        3600,
+      );
+      if (tries > 30) {
+        throw new BadRequestException('尝试次数过多，请一小时后再试或改用短信验证');
+      }
+    }
     const course = await this.prisma.course.findFirst({
       where: { feiceLiveRoomId: params.feiceLiveRoomId },
     });
@@ -253,13 +293,28 @@ export class TransferService {
       include: { customer: true },
     });
     let candidates = rosterEntries.map((r) => r.customer).filter(match);
-    // 2) 名单没唯一命中，退回全库匹配
+    // 2) 名单没唯一命中，退回全库匹配。
+    //    用正则要求后四位出现在某个手机号的结尾（逗号分隔），避免 contains 误命中
+    //    （如 1234 命中 12345）；LIMIT 2：0=无此人，1=命中，≥2=重名歧义，
+    //    不再把成千上万行全加载进内存。
     if (candidates.length !== 1) {
-      const all = await this.prisma.customer.findMany({
-        where: { remarkMobiles: { contains: params.suffix } },
-      });
-      const global = all.filter(match);
-      if (global.length >= 1) candidates = global;
+      const global: Array<{ id: number; remarkMobiles: string | null }> =
+        await this.prisma.$queryRaw`
+          SELECT id, "remarkMobiles"
+          FROM customers
+          WHERE "isDeleted" = false
+            AND "remarkMobiles" ~ (${params.suffix} || '(,|$)')
+          LIMIT 2
+        `;
+      if (global.length === 1) {
+        // 命中唯一：取完整客户信息（登录态/昵称/头像都要用）
+        const full = await this.prisma.customer.findUnique({
+          where: { id: global[0].id },
+        });
+        candidates = full ? [full] : [];
+      }
+      else if (global.length > 1) candidates = global as any;
+      else candidates = [];
     }
     if (candidates.length === 0) {
       return { ok: true, matched: false, message: '未匹配到学员，请确认手机号或联系销售老师' };

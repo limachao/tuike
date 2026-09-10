@@ -56,6 +56,11 @@ export default function CustomersPage() {
     });
   }, [customers, keyword, listenFilter]);
 
+  // 筛选变化时回到首批 200 行，避免清空筛选瞬间渲染上万行卡顿
+  useEffect(() => {
+    setVisibleCount(200);
+  }, [keyword, listenFilter]);
+
   const listenCell = (sec: number) => {
     if (!sec || sec <= 0) return <span className="text-text-tertiary">未听课</span>;
     const min = Math.round(sec / 60);

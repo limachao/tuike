@@ -39,11 +39,9 @@ export class WecomController {
     @Param('salesId') salesId: string,
     @CurrentUser() u: JwtUserPayload,
   ) {
-    // 主管可同步任意销售；销售只能同步自己
+    // 主管/超管可同步任意销售；销售只能同步自己
     const targetId =
-      u.role !== 'SUPERVISOR' && Number(salesId) !== u.sub
-        ? u.sub
-        : Number(salesId);
+      u.role === 'SALES' ? u.sub : Number(salesId);
     this.runInBackground(() => this.sync.syncCustomersForSales(targetId, u.sub), u.sub);
     return { started: true, message: '客户同步已在后台开始，预计几分钟，完成后刷新页面' };
   }

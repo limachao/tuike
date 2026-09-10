@@ -187,6 +187,12 @@ export default function QuickSendPage() {
     );
   }, [baseFiltered, activeTags]);
 
+  // 筛选条件变化时回到首批 200 行：避免之前滚加载到几千行后，
+  // 清空筛选的瞬间一次性渲染上万行导致页面卡顿
+  useEffect(() => {
+    setVisibleCount(200);
+  }, [keyword, addFrom, addTo, listenFilter, activeTags, excludeVIP, excludeListened]);
+
   const customerById = useMemo(
     () => new Map<number, any>(customers.map((c) => [c.id, c])),
     [customers],

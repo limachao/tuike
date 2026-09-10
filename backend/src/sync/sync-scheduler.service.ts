@@ -59,21 +59,37 @@ export class SyncSchedulerService implements OnApplicationBootstrap {
     }
   }
 
-  /** 每 30 分钟同步企业微信客户 */
+  /** 长耗时同步的重叠防护标志（上一轮没跑完时跳过本轮，避免并发刷企微/飞策接口） */
+  private wecomSyncRunning = false;
+  private feiceSyncRunning = false;
+
+  /** 每 30 分钟同步企业微信客户（单轮可能跑数十分钟，必须防重叠） */
   @Cron(CronExpression.EVERY_30_MINUTES, { name: 'sync-wecom' })
   async cronSyncWecom() {
+    if (this.wecomSyncRunning) {
+      this.logger.warn('[Cron] 上一轮企微同步仍在执行，本轮跳过');
+      return;
+    }
+    this.wecomSyncRunning = true;
     try {
       await this.wecom.syncUsers();
       await this.wecom.syncAllCustomers();
       this.logger.log('[Cron] 企业微信同步完成');
     } catch (e) {
       this.logger.error(`[Cron] 企业微信同步失败: ${(e as Error).message}`);
+    } finally {
+      this.wecomSyncRunning = false;
     }
   }
 
   /** 每 15 分钟同步飞策数据（先同步课程，再同步活跃课程的直播回放） */
   @Cron('0 */15 * * * *', { name: 'sync-feice' })
   async cronSyncFeice() {
+    if (this.feiceSyncRunning) {
+      this.logger.warn('[Cron] 上一轮飞策同步仍在执行，本轮跳过');
+      return;
+    }
+    this.feiceSyncRunning = true;
     try {
       await this.feice.syncCourses();
       const activeCourses = await this.prisma.course.findMany({
@@ -117,6 +133,8 @@ export class SyncSchedulerService implements OnApplicationBootstrap {
       }
     } catch (e) {
       this.logger.error(`[Cron] 飞策同步失败: ${(e as Error).message}`);
+    } finally {
+      this.feiceSyncRunning = false;
     }
   }
 
