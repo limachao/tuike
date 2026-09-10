@@ -415,65 +415,86 @@ export default function QuickSendPage() {
                 {filteredCustomers.some((c) => !isExcluded(c) && !selected.has(c.id)) ? '全选' : '取消全选'}
               </button>
 
-              {/* 第一排：客户标签 —— 点亮标签直接勾选该批客户（可多选，取并集；被过滤的人自动跳过） */}
+              {/* 第一排：客户标签 —— iOS 分组卡片样式；点亮 = 选中该批并收窄列表（可叠加） */}
               <div className="w-full pt-1">
-                <div className="text-[11px] text-text-tertiary mb-1.5">
-                  客户标签<span className="ml-1 text-text-tertiary/70">（点亮后列表只显示这批客户并自动勾选，可叠加多个）</span>
-                </div>
-                <div className="flex flex-wrap items-center gap-1.5">
-                  {allTags.length === 0 && (
-                    <span className="text-xs text-text-tertiary">暂无企微标签</span>
-                  )}
-                  {allTags.map(([t, n]) => {
-                    const active = activeTags.has(t);
-                    return (
-                      <button
-                        key={t}
-                        onClick={() => toggleTagChip(t)}
-                        className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full border text-xs whitespace-nowrap transition-colors ${
-                          active
-                            ? 'border-brand-500/60 bg-brand-500/15 text-brand-200'
-                            : 'border-white/10 bg-white/5 text-text-secondary hover:border-white/25'
-                        }`}
-                      >
-                        {active ? '✓ ' : ''}{t}
-                        <span className={`text-[10px] ${active ? 'text-brand-300' : 'text-text-tertiary'}`}>{n}人</span>
-                      </button>
-                    );
-                  })}
+                <div className="rounded-2xl border border-white/[0.08] bg-white/[0.03] p-3.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.05)]">
+                  <div className="flex items-center justify-between gap-2 mb-2.5">
+                    <span className="text-[11px] font-semibold tracking-wide text-text-secondary">
+                      🏷️ 客户标签
+                    </span>
+                    <span className="text-[10px] text-text-tertiary/80">点亮后列表只显示这批客户并自动勾选，可叠加多个</span>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    {allTags.length === 0 && (
+                      <span className="text-xs text-text-tertiary">暂无企微标签</span>
+                    )}
+                    {allTags.map(([t, n]) => {
+                      const active = activeTags.has(t);
+                      return (
+                        <button
+                          key={t}
+                          onClick={() => toggleTagChip(t)}
+                          className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-full border text-xs font-medium whitespace-nowrap transition-all duration-150 active:scale-95 ${
+                            active
+                              ? 'border-brand-300/60 bg-gradient-to-b from-brand-400 to-brand-600 text-white shadow-lg shadow-brand-500/30'
+                              : 'border-white/[0.12] bg-white/[0.07] text-text-secondary hover:bg-white/[0.12] hover:border-white/25'
+                          }`}
+                        >
+                          {active && (
+                            <span className="grid place-items-center h-3.5 w-3.5 rounded-full bg-white/25 text-[9px] leading-none">✓</span>
+                          )}
+                          {t}
+                          <span className={`px-1.5 rounded-full text-[10px] leading-4 ${
+                            active ? 'bg-white/20 text-white' : 'bg-black/25 text-text-tertiary'
+                          }`}>{n}人</span>
+                        </button>
+                      );
+                    })}
+                  </div>
                 </div>
               </div>
 
-              {/* 第二排：过滤标签 —— 点亮后命中的客户不推送（自动取消勾选，且勾不上、全选跳过） */}
+              {/* 第二排：过滤标签 —— 淡红警示卡片；点亮后命中客户不推送（取消勾选、不可选、全选跳过） */}
               <div className="w-full">
-                <div className="text-[11px] text-text-tertiary mb-1.5">
-                  过滤标签<span className="ml-1 text-red-300/80">（点亮后，命中的客户不会收到消息）</span>
-                </div>
-                <div className="flex flex-wrap items-center gap-1.5">
-                  <button
-                    onClick={toggleExcludeVIP}
-                    className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full border text-xs whitespace-nowrap transition-colors ${
-                      excludeVIP
-                        ? 'border-red-500/60 bg-red-500/15 text-red-200'
-                        : 'border-white/10 bg-white/5 text-text-secondary hover:border-white/25'
-                    }`}
-                    title="按企微标签名 VIP 匹配（忽略大小写）"
-                  >
-                    🚫 VIP{excludeVIP ? '·已排除' : ''}
-                    <span className={`text-[10px] ${excludeVIP ? 'text-red-300' : 'text-text-tertiary'}`}>{vipCount}人</span>
-                  </button>
-                  <button
-                    onClick={toggleExcludeListened}
-                    className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full border text-xs whitespace-nowrap transition-colors ${
-                      excludeListened
-                        ? 'border-red-500/60 bg-red-500/15 text-red-200'
-                        : 'border-white/10 bg-white/5 text-text-secondary hover:border-white/25'
-                    }`}
-                    title="飞策听课时长 > 0 即视为已听课"
-                  >
-                    🚫 已听课{excludeListened ? '·已排除' : ''}
-                    <span className={`text-[10px] ${excludeListened ? 'text-red-300' : 'text-text-tertiary'}`}>{listenedCount}人</span>
-                  </button>
+                <div className="rounded-2xl border border-red-500/20 bg-red-500/[0.05] p-3.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.04)]">
+                  <div className="flex items-center gap-2 mb-2.5">
+                    <span className="text-[11px] font-semibold tracking-wide text-red-300/90">
+                      🚫 过滤标签
+                    </span>
+                    <span className="text-[10px] text-text-tertiary/80">点亮后，命中的客户不会收到消息</span>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      onClick={toggleExcludeVIP}
+                      className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-full border text-sm font-medium whitespace-nowrap transition-all duration-150 active:scale-95 ${
+                        excludeVIP
+                          ? 'border-red-300/60 bg-gradient-to-b from-red-400 to-red-600 text-white shadow-lg shadow-red-500/30'
+                          : 'border-white/[0.12] bg-white/[0.07] text-text-secondary hover:bg-white/[0.12] hover:border-white/25'
+                      }`}
+                      title="按企微标签名 VIP 匹配（忽略大小写）"
+                    >
+                      🚫 VIP
+                      {excludeVIP && <span className="text-[11px] font-normal text-white/85">·已排除</span>}
+                      <span className={`px-1.5 rounded-full text-[11px] leading-4 ${
+                        excludeVIP ? 'bg-white/20 text-white' : 'bg-black/25 text-text-tertiary'
+                      }`}>{vipCount}人</span>
+                    </button>
+                    <button
+                      onClick={toggleExcludeListened}
+                      className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-full border text-sm font-medium whitespace-nowrap transition-all duration-150 active:scale-95 ${
+                        excludeListened
+                          ? 'border-red-300/60 bg-gradient-to-b from-red-400 to-red-600 text-white shadow-lg shadow-red-500/30'
+                          : 'border-white/[0.12] bg-white/[0.07] text-text-secondary hover:bg-white/[0.12] hover:border-white/25'
+                      }`}
+                      title="飞策听课时长 > 0 即视为已听课"
+                    >
+                      🚫 已听课
+                      {excludeListened && <span className="text-[11px] font-normal text-white/85">·已排除</span>}
+                      <span className={`px-1.5 rounded-full text-[11px] leading-4 ${
+                        excludeListened ? 'bg-white/20 text-white' : 'bg-black/25 text-text-tertiary'
+                      }`}>{listenedCount}人</span>
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
