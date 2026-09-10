@@ -84,16 +84,30 @@ export default function QuickSendPage() {
   /** VIP 类标签：企微标签名以 VIP 开头（忽略大小写/空格），如「VIP」「VIP 学生」 */
   const isVIPTagName = (t: string) => String(t).trim().toUpperCase().startsWith('VIP');
 
-  /** 客户身上出现过的全部企微标签（按人数倒序）；VIP 类标签归入过滤区，不在此显示 */
+  /** 渠道来源标签：X老师视频号查岗 / X老师抖音号 等——群发选人时不展示（数据仍保留在客户资料里） */
+  const isChannelTagName = (t: string) => /视频号|抖音/.test(String(t));
+
+  /** 客户身上出现过的全部企微标签（按人数倒序）；VIP 类、渠道来源标签不在此显示 */
   const allTags = useMemo(() => {
     const m = new Map<string, number>();
     for (const c of customers) {
       for (const t of (c.wecomTags ?? []) as string[]) {
-        if (isVIPTagName(t)) continue;
+        if (isVIPTagName(t) || isChannelTagName(t)) continue;
         m.set(t, (m.get(t) ?? 0) + 1);
       }
     }
     return [...m.entries()].sort((a, b) => b[1] - a[1]);
+  }, [customers]);
+
+  /** 被隐藏的渠道来源标签种类数（用于界面提示，让销售知道这些标签只是不在此显示） */
+  const hiddenChannelTagCount = useMemo(() => {
+    const s = new Set<string>();
+    for (const c of customers) {
+      for (const t of (c.wecomTags ?? []) as string[]) {
+        if (isChannelTagName(t)) s.add(t);
+      }
+    }
+    return s.size;
   }, [customers]);
 
   /** 基础筛选：昵称/手机号关键词 + 加入企微日期区间 + 听课状态（不含标签） */
@@ -455,6 +469,11 @@ export default function QuickSendPage() {
                       );
                     })}
                   </div>
+                  {hiddenChannelTagCount > 0 && (
+                    <div className="mt-2.5 pt-2 border-t border-white/[0.06] text-[10px] text-text-tertiary/70">
+                      已隐藏 {hiddenChannelTagCount} 个渠道来源标签（X老师视频号 / 抖音号等），仅不在此显示，客户资料中照常保留
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -564,19 +583,34 @@ export default function QuickSendPage() {
                               {excludeListened && (c.listenSec ?? 0) > 0 ? '·已听课' : ''}
                             </span>
                           )}
-                          {((c.wecomTags ?? []) as string[]).slice(0, 2).map((t) => (
-                            <span
-                              key={t}
-                              className="inline-flex items-center px-1.5 py-0.5 rounded-md border border-sky-500/30 bg-sky-500/10 text-sky-300 text-[10px] leading-4 whitespace-nowrap"
-                            >
-                              {t}
-                            </span>
-                          ))}
-                          {((c.wecomTags ?? []) as string[]).length > 2 && (
-                            <span className="text-[10px] text-text-tertiary">
-                              +{((c.wecomTags ?? []) as string[]).length - 2}
-                            </span>
-                          )}
+                          {(() => {
+                            // 行内标签：期数/意向类排前面高亮显示；渠道/VIP 类排后面并弱化样式
+                            const tags = (c.wecomTags ?? []) as string[];
+                            const isDim = (t: string) => isChannelTagName(t) || isVIPTagName(t);
+                            const ordered = [
+                              ...tags.filter((t) => !isDim(t)),
+                              ...tags.filter((t) => isDim(t)),
+                            ];
+                            return (
+                              <>
+                                {ordered.slice(0, 2).map((t) => (
+                                  <span
+                                    key={t}
+                                    className={`inline-flex items-center px-1.5 py-0.5 rounded-md border text-[10px] leading-4 whitespace-nowrap ${
+                                      isDim(t)
+                                        ? 'border-white/10 bg-white/[0.04] text-text-tertiary'
+                                        : 'border-sky-500/30 bg-sky-500/10 text-sky-300'
+                                    }`}
+                                  >
+                                    {t}
+                                  </span>
+                                ))}
+                                {tags.length > 2 && (
+                                  <span className="text-[10px] text-text-tertiary">+{tags.length - 2}</span>
+                                )}
+                              </>
+                            );
+                          })()}
                         </div>
                       </td>
                       <td className="py-2 pr-4 tabular-nums whitespace-nowrap">
