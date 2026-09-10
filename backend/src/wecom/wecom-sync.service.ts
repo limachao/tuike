@@ -195,25 +195,37 @@ export class WecomSyncService {
           const results = await Promise.allSettled(
             batch.map(async ({ externalUserid, item }) => {
               const detail = await this.api.getCustomerDetail(externalUserid);
-              if (detail?.follow_info?.tags?.length) {
-                return { externalUserid, item, detail };
+              // get 接口返回的是 follow_user[]（多个跟进人），不是 follow_info
+              // 需要找到当前销售对应的跟进人，取其 tags
+              const followInfoFromGet = Array.isArray(detail?.follow_user)
+                ? detail.follow_user.find((f: any) => f.userid === sales.wecomUserId)
+                : null;
+              if (followInfoFromGet?.tags?.length) {
+                return { externalUserid, item, followInfoFromGet };
               }
-              return null;
+              // 即使没 tags，也要把 followInfoFromGet（可能有 tag_id）合并进来
+              return { externalUserid, item, followInfoFromGet: null };
             }),
           );
           for (const r of results) {
-            if (r.status === 'fulfilled' && r.value) {
-              const { externalUserid, item, detail } = r.value;
-              const idx = rows.findIndex(
-                (row) => row.externalUserid === externalUserid,
-              );
-              if (idx >= 0) {
-                rows[idx] = this.extractCustomerRow(externalUserid, {
-                  ...item,
-                  follow_info: detail.follow_info,
-                }, tm);
-                refetched++;
-              }
+            if (r.status !== 'fulfilled' || !r.value) continue;
+            const { externalUserid, item, followInfoFromGet } = r.value;
+            const idx = rows.findIndex(
+              (row) => row.externalUserid === externalUserid,
+            );
+            if (idx >= 0) {
+              // 合并：item.follow_info 的基础字段 + get 返回的 tags/tag_id
+              const mergedFollowInfo = {
+                ...item?.follow_info,
+                ...(followInfoFromGet ?? {}),
+                // tags 用 get 返回的（完整含个人标签），覆盖 batch 的空值
+                tags: followInfoFromGet?.tags ?? item?.follow_info?.tags,
+              };
+              rows[idx] = this.extractCustomerRow(externalUserid, {
+                ...item,
+                follow_info: mergedFollowInfo,
+              }, tm);
+              if (followInfoFromGet?.tags?.length) refetched++;
             }
           }
           // 每 50 批打一条进度
