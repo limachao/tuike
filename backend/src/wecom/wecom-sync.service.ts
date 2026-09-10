@@ -187,7 +187,10 @@ export class WecomSyncService {
         );
         let refetched = 0;
         const BATCH = 10;
+        const totalBatches = Math.ceil(needRefetch.length / BATCH);
+        const t0 = Date.now();
         for (let i = 0; i < needRefetch.length; i += BATCH) {
+          const batchIdx = Math.floor(i / BATCH) + 1;
           const batch = needRefetch.slice(i, i + BATCH);
           const results = await Promise.allSettled(
             batch.map(async ({ externalUserid, item }) => {
@@ -212,6 +215,14 @@ export class WecomSyncService {
                 refetched++;
               }
             }
+          }
+          // 每 50 批打一条进度
+          if (batchIdx % 50 === 0 || batchIdx === totalBatches) {
+            const elapsed = ((Date.now() - t0) / 1000).toFixed(0);
+            const speed = (batchIdx * BATCH / (Date.now() - t0) * 1000).toFixed(1);
+            this.logger.log(
+              `[WeCom同步] 销售#${salesId} 补调进度 ${batchIdx}/${totalBatches} 批 | 已用 ${elapsed}s | 有标签 ${refetched} | 速度 ~${speed}/s`,
+            );
           }
         }
         this.logger.log(
