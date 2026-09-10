@@ -265,20 +265,19 @@ export class ReminderService {
     const t = await this.prisma.wecomGroupMessageTask.findUniqueOrThrow({
       where: { id: taskId },
       include: {
-        recipients: {
-          include: {
-            customer: {
-              select: {
-                id: true,
-                nickname: true,
-                avatar: true,
-                externalUserid: true,
+          recipients: {
+            include: {
+              customer: {
+                select: {
+                  id: true,
+                  nickname: true,
+                  avatar: true,
+                  externalUserid: true,
+                },
               },
+              roster: true,
             },
-            roster: true,
           },
-          take: 500,
-        },
         monitoringTask: { include: { course: true } },
       },
     });

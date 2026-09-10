@@ -29,12 +29,12 @@ export default function ReminderTaskDetailPage() {
   if (!task) return <div className="glass-card p-10 text-center text-text-tertiary">加载中…</div>;
 
   const recipients = task.recipients ?? [];
-  const total = recipients.length;
+  const total = task.totalRecipients ?? recipients.length;
+  const successCount = task.sentSuccessCount ?? recipients.filter((r: any) => r.customerReceived === true).length;
+  const failedCount = task.sentFailCount ?? recipients.filter((r: any) => r.customerReceived === false).length;
   const openCount = recipients.filter((r: any) => r.openedTransferPage).length;
   const jumpedCount = recipients.filter((r: any) => r.jumpedToFeice).length;
   const completedCount = recipients.filter((r: any) => r.completed).length;
-  const failedCount = recipients.filter((r: any) => r.customerReceived === false).length;
-  const successCount = recipients.filter((r: any) => r.customerReceived === true).length;
 
   return (
     <div className="space-y-6">
