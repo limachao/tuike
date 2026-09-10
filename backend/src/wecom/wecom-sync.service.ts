@@ -159,6 +159,8 @@ export class WecomSyncService {
       let cursor: string | undefined;
       const seenExternalUserids = new Set<string>();
       const rows: CustomerSyncRow[] = [];
+      // 收集需要补调 get 的客户（批量接口的 tag_id 里有标签库找不到的个人标签）
+      const needRefetch: Array<{ externalUserid: string; item: any }> = [];
       do {
         const { list, nextCursor } = await this.api.getCustomersByUser(
           sales.wecomUserId,
@@ -168,11 +170,52 @@ export class WecomSyncService {
           const externalUserid = item?.external_contact?.external_userid;
           if (!externalUserid) continue;
           seenExternalUserids.add(externalUserid);
-          rows.push(this.extractCustomerRow(externalUserid, item, tm));
+          const row = this.extractCustomerRow(externalUserid, item, tm);
+          // 检测：follow_info.tag_id 里有没有 tagMap 找不到的 id（= 个人标签）
+          const fi = item?.follow_info;
+          const unknownIds = (fi?.tag_id ?? []).filter(
+            (id: string) => tm && !tm.has(String(id)),
+          );
+          if (unknownIds.length > 0) {
+            needRefetch.push({ externalUserid, item });
+          }
+          rows.push(row);
           total++;
         }
         cursor = nextCursor;
       } while (cursor);
+
+      // 批量接口只返回 tag_id（无 name），标签库又不含个人标签
+      // 对有未知 tag_id 的客户补调 externalcontact/get（返回的 follow_info.tags 带 name+group）
+      if (needRefetch.length > 0) {
+        this.logger.log(
+          `[WeCom同步] 销售#${salesId} 有 ${needRefetch.length} 个客户含未映射的个人标签，补调 get 接口`,
+        );
+        let refetched = 0;
+        for (const { externalUserid, item } of needRefetch) {
+          try {
+            const detail = await this.api.getCustomerDetail(externalUserid);
+            if (detail?.follow_info?.tags?.length) {
+              // 用 get 返回的完整 follow_info.tags 覆盖批量数据
+              const idx = rows.findIndex(
+                (r) => r.externalUserid === externalUserid,
+              );
+              if (idx >= 0) {
+                rows[idx] = this.extractCustomerRow(externalUserid, {
+                  ...item,
+                  follow_info: detail.follow_info,
+                }, tm);
+                refetched++;
+              }
+            }
+          } catch {
+            // 单个失败不影响整体
+          }
+        }
+        this.logger.log(
+          `[WeCom同步] 销售#${salesId} 补调成功 ${refetched}/${needRefetch.length}`,
+        );
+      }
       // 批量落库：每 500 人一批，3 条 SQL 顶过去 ~1500 条逐条查询
       await this.bulkUpsertCustomers(rows, sales.id);
       // unionid 到手率观测：接口不返回 unionid（未绑微信开发者ID/主体不一致）时恒为 0，
