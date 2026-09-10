@@ -81,11 +81,15 @@ export default function QuickSendPage() {
     else if (kind === 'gen') fillGenerated(Number(idStr));
   };
 
-  /** 客户身上出现过的全部企微标签（按人数倒序），用于标签筛选下拉 */
+  /** VIP 类标签：企微标签名以 VIP 开头（忽略大小写/空格），如「VIP」「VIP 学生」 */
+  const isVIPTagName = (t: string) => String(t).trim().toUpperCase().startsWith('VIP');
+
+  /** 客户身上出现过的全部企微标签（按人数倒序）；VIP 类标签归入过滤区，不在此显示 */
   const allTags = useMemo(() => {
     const m = new Map<string, number>();
     for (const c of customers) {
       for (const t of (c.wecomTags ?? []) as string[]) {
+        if (isVIPTagName(t)) continue;
         m.set(t, (m.get(t) ?? 0) + 1);
       }
     }
@@ -130,9 +134,9 @@ export default function QuickSendPage() {
     [customers],
   );
 
-  /** VIP：企微标签名正好是 VIP（忽略大小写和首尾空格） */
+  /** VIP：客户身上带任意 VIP 类标签（VIP / VIP 学生 等） */
   const isVIP = (c: any) =>
-    ((c?.wecomTags ?? []) as string[]).some((t) => String(t).trim().toUpperCase() === 'VIP');
+    ((c?.wecomTags ?? []) as string[]).some((t) => isVIPTagName(t));
 
   /** 命中「过滤标签」任一规则的客户：不推送（勾选被拦截、全选跳过、行置灰） */
   const isExcluded = (c: any) =>
@@ -471,9 +475,9 @@ export default function QuickSendPage() {
                           ? 'border-red-300/60 bg-gradient-to-b from-red-400 to-red-600 text-white shadow-lg shadow-red-500/30'
                           : 'border-white/[0.12] bg-white/[0.07] text-text-secondary hover:bg-white/[0.12] hover:border-white/25'
                       }`}
-                      title="按企微标签名 VIP 匹配（忽略大小写）"
+                      title="匹配企微里以 VIP 开头的标签，如「VIP 学生」"
                     >
-                      🚫 VIP
+                      🚫 VIP 客户
                       {excludeVIP && <span className="text-[11px] font-normal text-white/85">·已排除</span>}
                       <span className={`px-1.5 rounded-full text-[11px] leading-4 ${
                         excludeVIP ? 'bg-white/20 text-white' : 'bg-black/25 text-text-tertiary'
