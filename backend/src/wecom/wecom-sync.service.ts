@@ -37,6 +37,9 @@ interface CustomerSyncRow {
  *   1. follow_info.tags: [{group_id, tag_id, tag_name, type}] —— 直接带 tag_name
  *   2. follow_info.tag_id: string[] —— 只返回 tag_id，需通过标签库接口查 name + group
  */
+/** 过滤掉的标签组（无业务意义的内部标签） */
+const SKIP_TAG_GROUPS = new Set(['学员等级']);
+
 function extractWecomTagNames(
   followInfo: any,
   tagMap: Map<string, { name: string; group: string }>,
@@ -45,16 +48,18 @@ function extractWecomTagNames(
   const out: Array<{ name: string; group: string }> = [];
   // 路径 1：follow_info.tags 直接带 tag_name
   for (const t of Array.isArray(followInfo?.tags) ? followInfo.tags : []) {
+    const group = String(t?.group_name ?? '').trim();
+    if (SKIP_TAG_GROUPS.has(group)) continue;
     const n = String(t?.tag_name ?? '').trim();
     if (n && !seen.has(n)) {
       seen.add(n);
-      out.push({ name: n, group: String(t?.group_name ?? '') });
+      out.push({ name: n, group });
     }
   }
   // 路径 2：follow_info.tag_id 需查标签库（带 group 信息）
   for (const tid of Array.isArray(followInfo?.tag_id) ? followInfo.tag_id : []) {
     const info = tagMap.get(String(tid));
-    if (info?.name && !seen.has(info.name)) {
+    if (info?.name && !seen.has(info.name) && !SKIP_TAG_GROUPS.has(info.group)) {
       seen.add(info.name);
       out.push({ name: info.name, group: info.group });
     }
