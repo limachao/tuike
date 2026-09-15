@@ -25,6 +25,9 @@ interface CustomerSyncRow {
   wecomUnionid: string | null;
   tags: string | null;
   wecomTags: string | null;
+  /** 标签是否已通过 get 接口取完整（含个人标签）。
+   *  true=已确认（无标签时 wecomTags 落库为 '[]'）；false=补调失败，关系列保持 NULL */
+  tagsComplete: boolean;
   addTime: Date | null;
   detail: any;
 }
@@ -191,6 +194,8 @@ export class WecomSyncService {
           `[WeCom同步] 销售#${salesId} 开始补调 get 接口获取完整标签（${needRefetch.length} 个客户）`,
         );
         let refetched = 0;
+        /** 补调最终失败的客户（重试 3 次仍失败）：保留其旧标签，绝不用残缺数据覆盖 */
+        const refetchFailed = new Set<string>();
         const BATCH = 10;
         const totalBatches = Math.ceil(needRefetch.length / BATCH);
         const t0 = Date.now();
@@ -212,9 +217,15 @@ export class WecomSyncService {
               return { externalUserid, item, followInfoFromGet: null };
             }),
           );
-          for (const r of results) {
-            if (r.status !== 'fulfilled' || !r.value) continue;
-            const { externalUserid, item, followInfoFromGet } = r.value;
+          for (let bi = 0; bi < results.length; bi++) {
+            const r = results[bi];
+            const externalUserid = batch[bi].externalUserid;
+            if (r.status !== 'fulfilled' || !r.value) {
+              // 网络/限流/超时：这个客户本轮没拿到完整标签，标记稍后保留旧值
+              refetchFailed.add(externalUserid);
+              continue;
+            }
+            const { item, followInfoFromGet } = r.value;
             const idx = rows.findIndex(
               (row) => row.externalUserid === externalUserid,
             );
@@ -230,6 +241,8 @@ export class WecomSyncService {
                 ...item,
                 follow_info: mergedFollowInfo,
               }, tm);
+              // get 成功 = 标签已取完整（即使为空也是企微真实状态）
+              rows[idx].tagsComplete = true;
               if (followInfoFromGet?.tags?.length) refetched++;
             }
           }
@@ -243,8 +256,30 @@ export class WecomSyncService {
           }
         }
         this.logger.log(
-          `[WeCom同步] 销售#${salesId} get 补调完成：有标签 ${refetched}/${needRefetch.length}`,
+          `[WeCom同步] 销售#${salesId} get 补调完成：有标签 ${refetched}/${needRefetch.length}${refetchFailed.size ? `，失败保留旧标签 ${refetchFailed.size} 个` : ''}`,
         );
+        // 补调失败的客户：用库里旧标签回填（优先该销售关系上的，其次客户表合集），
+        // 避免批量接口返回的不完整标签（缺个人标签）把旧数据冲掉
+        if (refetchFailed.size > 0) {
+          const failedExts = [...refetchFailed];
+          const oldRows: any[] = await this.prisma.$queryRaw`
+            SELECT c.external_userid AS ext,
+                   r."wecomTags"      AS rel_tags,
+                   c.wecom_tags       AS cust_tags
+            FROM unnest(${failedExts}::text[]) AS t(ext)
+            JOIN customers c ON c.external_userid = t.ext
+            LEFT JOIN customer_sales_relations r
+              ON r."customerId" = c.id AND r."salesUserId" = ${sales.id}
+          `;
+          const oldMap = new Map<string, string | null>(
+            oldRows.map((o) => [o.ext, o.rel_tags ?? o.cust_tags ?? null]),
+          );
+          for (const row of rows) {
+            if (refetchFailed.has(row.externalUserid)) {
+              row.wecomTags = oldMap.get(row.externalUserid) ?? null;
+            }
+          }
+        }
       }
       // 批量落库：每 500 人一批，3 条 SQL 顶过去 ~1500 条逐条查询
       await this.bulkUpsertCustomers(rows, sales.id);
@@ -312,6 +347,10 @@ export class WecomSyncService {
     salesId: number,
     detail?: any,
     tagMap?: Map<string, { name: string; group: string }>,
+    /** 已由批量提取阶段算好的标签（带 tagMap），优先于用 detail 重新解析 */
+    explicitWecomTags?: string | null,
+    /** 标签是否已取完整；false=补调失败保留 NULL，undefined 视为完整（旧 get 调用方） */
+    tagsComplete?: boolean,
   ) {
     // 查详情（Mock 模式或未传入时可能为空）
     if (!detail) {
@@ -334,7 +373,10 @@ export class WecomSyncService {
     const gender = contact.gender ?? 0;
     const tags = JSON.stringify(contact.external_profile?.external_attr ?? []);
     const wecomTagNames = extractWecomTagNames(followInfo, tagMap ?? new Map());
-    const wecomTags = wecomTagNames ? JSON.stringify(wecomTagNames) : null;
+    // explicitWecomTags 可能显式为 null（提取阶段确认无标签），只在 undefined 时用本地解析值
+    const wecomTags = explicitWecomTags !== undefined
+      ? explicitWecomTags
+      : (wecomTagNames ? JSON.stringify(wecomTagNames) : null);
     const remarkMobiles = followInfo?.remark_mobiles?.join(',') ?? null;
     // unionid：企微后台绑定微信开发者ID后 externalcontact/get 才会返回。
     // 注意企微对无 unionid 的客户可能返回空字符串 ""，而 wecom_unionid 有唯一约束，
@@ -367,7 +409,6 @@ export class WecomSyncService {
           remarkMobiles,
           wecomUnionid,
           tags,
-          wecomTags,
           ownerUserId: salesId,
           studentId,
           thirdPartyTraceId,
@@ -386,13 +427,14 @@ export class WecomSyncService {
           mobileEncrypted: mobileEncrypted ?? customer.mobileEncrypted,
           wecomUnionid: wecomUnionid ?? undefined,
           tags,
-          wecomTags,
           isDeleted: false, // 接口能返回说明好友关系仍在/已恢复
           lastSyncedAt: new Date(),
         },
       });
     }
-    // 归属关系（多对多）
+    // 归属关系（多对多）：标签按销售隔离
+    // 完整同步但无标签 -> '[]'；补调失败(tagsComplete=false) -> NULL，合集重建时沿用旧值
+    const relationTags = tagsComplete === false ? wecomTags : (wecomTags ?? '[]');
     await this.prisma.customerSalesRelation.upsert({
       where: {
         customerId_salesUserId: { customerId: customer.id, salesUserId: salesId },
@@ -402,9 +444,12 @@ export class WecomSyncService {
         salesUserId: salesId,
         addTime,
         isPrimary: customer.ownerUserId === salesId,
+        wecomTags: relationTags,
       },
-      update: { status: 'active', addTime: addTime ?? undefined },
+      update: { status: 'active', addTime: addTime ?? undefined, wecomTags: relationTags },
     });
+    // 该客户标签合集随关系标签更新（客户资料页展示合集）
+    await this.rebuildCustomerTags([customer.id]);
     return customer;
   }
 
@@ -443,6 +488,8 @@ export class WecomSyncService {
         const names = extractWecomTagNames(followInfo, tagMap);
         return names ? JSON.stringify(names) : null;
       })(),
+      // 批量接口只返回企业标签，个人标签需补调 get 才算完整
+      tagsComplete: false,
       addTime: followTimeRaw ? new Date(Number(followTimeRaw) * 1000) : null,
       detail,
     };
@@ -486,7 +533,8 @@ export class WecomSyncService {
             "mobileEncrypted" = COALESCE(EXCLUDED."mobileEncrypted", customers."mobileEncrypted"),
             wecom_unionid = COALESCE(EXCLUDED.wecom_unionid, customers.wecom_unionid),
             tags = EXCLUDED.tags,
-            wecom_tags = EXCLUDED.wecom_tags,
+            -- wecom_tags 不在此更新：它是"所有销售标签合集"，
+            -- 由关系写入后统一 rebuildCustomerTags() 汇总，防止后同步销售覆盖前人标签
             "isDeleted" = false,
             "lastSyncedAt" = now(),
             "updatedAt" = now()
@@ -499,42 +547,106 @@ export class WecomSyncService {
         const idMap = new Map<string, { id: number; owner: number }>(
           idRows.map((r) => [r.external_userid, { id: Number(r.id), owner: Number(r.owner_user_id) }]),
         );
-        const relRows = chunk.map((r) => ({
-          cid: idMap.get(r.externalUserid)?.id,
-          isPrimary: idMap.get(r.externalUserid)?.owner === salesId,
-          addTime: r.addTime,
-        })).filter((r) => r.cid);
+        const relRows = chunk
+          .map((r) => ({
+            cid: idMap.get(r.externalUserid)?.id,
+            isPrimary: idMap.get(r.externalUserid)?.owner === salesId,
+            addTime: r.addTime,
+            // 已取完整：无标签写 '[]'（明确状态）；补调失败：写 null（沿用旧合集兜底）
+            wecomTags: r.tagsComplete ? (r.wecomTags ?? '[]') : r.wecomTags,
+          }))
+          .filter((r) => r.cid);
         await this.prisma.$executeRaw`
-          INSERT INTO customer_sales_relations ("customerId", "salesUserId", "addTime", "isPrimary", status)
-          SELECT cid, ${salesId}, fat, isp, 'active'
+          INSERT INTO customer_sales_relations ("customerId", "salesUserId", "addTime", "isPrimary", status, "wecomTags")
+          SELECT cid, ${salesId}, fat, isp, 'active', wtg
           FROM unnest(
             ${relRows.map((r) => r.cid!)}::int[],
             ${relRows.map((r) => r.addTime)}::timestamptz[],
-            ${relRows.map((r) => r.isPrimary)}::boolean[]
-          ) AS t(cid, fat, isp)
+            ${relRows.map((r) => r.isPrimary)}::boolean[],
+            ${relRows.map((r) => r.wecomTags)}::text[]
+          ) AS t(cid, fat, isp, wtg)
           ON CONFLICT ("customerId", "salesUserId") DO UPDATE SET
             status = 'active',
+            "wecomTags" = EXCLUDED."wecomTags",
             "addTime" = COALESCE(
               LEAST(customer_sales_relations."addTime", EXCLUDED."addTime"),
               customer_sales_relations."addTime", EXCLUDED."addTime")
         `;
+        // 关系标签已按销售隔离落库，重建这批客户的"全销售标签合集"
+        await this.rebuildCustomerTags(relRows.map((r) => r.cid!));
       } catch (e) {
         // 打印完整错误（含 Prisma/Postgres 原因），否则只看到空信息无法排查
         this.logger.error(
           `批量同步分块失败（销售#${salesId}，第 ${Math.floor(i / CHUNK) + 1} 块，${chunk.length} 人），降级为逐条写入`,
           e instanceof Error ? e.stack ?? e.message : String(e),
         );
+        const fallbackIds: number[] = [];
         for (const r of chunk) {
           try {
-            await this.upsertCustomer(r.externalUserid, salesId, r.detail);
+            const c = await this.upsertCustomer(
+              r.externalUserid, salesId, r.detail, undefined, r.wecomTags, r.tagsComplete,
+            );
+            fallbackIds.push(c.id);
           } catch (e2) {
             this.logger.warn(
               `客户 ${r.externalUserid} 同步失败: ${(e2 as Error).message}`,
             );
           }
         }
+        // 逐条路径里已 rebuild，批量再兜底一次（成功/失败混合时保证合集正确）
+        if (fallbackIds.length > 0) await this.rebuildCustomerTags(fallbackIds);
       }
     }
+  }
+
+  /**
+   * 按所有 active 销售关系上的 wecomTags 重建客户表 wecom_tags 合集。
+   * 同名标签跨销售只保留一个；无任何标签 -> NULL。
+   * 过渡兼容：若该客户仍有 active 关系的 wecomTags 为 NULL（升级后尚未同步到），
+   * 把 customers 表旧合集也并入，保证升级期间一个销售都没重刷完也不丢标签。
+   */
+  private async rebuildCustomerTags(customerIds: number[]) {
+    if (customerIds.length === 0) return;
+    const ids = [...new Set(customerIds)];
+    await this.prisma.$executeRaw`
+      UPDATE customers c
+      SET wecom_tags = NULLIF(agg.tags::text, '[]'),
+          "updatedAt" = now()
+      FROM (
+        SELECT t.cid AS customer_id, (
+          SELECT COALESCE(jsonb_agg(e.tag), '[]'::jsonb)
+          FROM (
+            SELECT DISTINCT ON (z.tag->>'name') z.tag
+            FROM (
+              -- 各销售关系上的新标签
+              SELECT x.tag
+              FROM customer_sales_relations rr
+              CROSS JOIN LATERAL jsonb_array_elements(
+                COALESCE(rr."wecomTags"::jsonb, '[]'::jsonb)
+              ) AS x(tag)
+              WHERE rr."customerId" = t.cid AND rr.status = 'active'
+              UNION ALL
+              -- 旧合集兜底：仅当还存在未按新方案同步(NULL)的 active 关系
+              SELECT y.tag
+              FROM customers oldc
+              CROSS JOIN LATERAL jsonb_array_elements(
+                COALESCE(oldc.wecom_tags::jsonb, '[]'::jsonb)
+              ) AS y(tag)
+              WHERE oldc.id = t.cid
+                AND EXISTS (
+                  SELECT 1 FROM customer_sales_relations rr2
+                  WHERE rr2."customerId" = t.cid
+                    AND rr2.status = 'active'
+                    AND rr2."wecomTags" IS NULL
+                )
+            ) AS z(tag)
+            ORDER BY z.tag->>'name'
+          ) AS e(tag)
+        ) AS tags
+        FROM unnest(${ids}::int[]) AS t(cid)
+      ) AS agg
+      WHERE c.id = agg.customer_id
+    `;
   }
 
   /**
@@ -589,6 +701,8 @@ export class WecomSyncService {
         data: { ownerUserId: primary.salesUserId, isDeleted: false },
       });
     }
+    // 关系删除/转交后，受影响客户的标签合集需要重建
+    await this.rebuildCustomerTags(affectedCustomerIds);
     this.logger.log(
       `销售#${salesId} 同步清理失效关系 ${staleRelations.length} 条，涉及客户 ${affectedCustomerIds.length} 位`,
     );

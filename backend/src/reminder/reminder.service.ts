@@ -357,7 +357,9 @@ export class ReminderService {
       SELECT c.id,
              c.nickname,
              c."remarkMobiles" AS remark_mobiles,
-             c.wecom_tags AS wecom_tags,
+             -- 优先读"当前销售自己关系上的标签"（与企微该销售视角完全一致）；
+             -- 该销售升级后尚未同步(NULL)时，回退客户表全销售合集，保证过渡期不空白
+             COALESCE(NULLIF(r."wecomTags", ''), c.wecom_tags) AS wecom_tags,
              r."addTime" AS add_time,
              (COALESCE(s."liveSec", 0) + COALESCE(s."replaySec", 0))::int AS listen_sec
       FROM customers c

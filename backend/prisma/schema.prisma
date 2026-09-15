@@ -109,6 +109,10 @@ model CustomerSalesRelation {
   addTime     DateTime?
   isPrimary   Boolean   @default(false)
   status      String    @default("active") @db.VarChar(20) // active / transferred / deleted
+  // 该销售在企微里给这个客户打的标签（含企业标签 + 销售个人标签），
+  // JSON: [{name,group}]。按销售隔离存储：A 销售同步只写 A 的，不会被 B 覆盖。
+  // customers.wecom_tags 是所有活跃销售标签的合集（供客户资料页展示）。
+  wecomTags   String?   @db.Text
   createdAt   DateTime  @default(now())
 
   customer    Customer  @relation(fields: [customerId], references: [id], onDelete: Cascade)
