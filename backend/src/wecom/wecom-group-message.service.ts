@@ -178,6 +178,10 @@ export class WecomGroupMessageService {
     let sentSuccess = 0;
     let sentFail = 0;
     const failMap = new Map<string, string>();
+    // 明确发送成功(status=1)的客户集合。
+    // 不能用"不在失败名单里"反推成功：销售还没在手机端点发送的客户(status=0)
+    // 根本不会出现在 send_list 里，反推会把他们误标成已送达。
+    const successSet = new Set<string>();
 
     for (const member of memberTasks) {
       let cursor: string | undefined;
@@ -192,16 +196,23 @@ export class WecomGroupMessageService {
           for (const item of r?.send_list ?? []) {
             const status = Number(item.status);
             if (status === 1) {
-              // 1 = 已发送成功
-              sentSuccess++;
+              // 1 = 已发送成功（共同客户可能被多个成员跟进，Set 自动去重）
+              if (!successSet.has(item.external_userid)) {
+                successSet.add(item.external_userid);
+                sentSuccess++;
+              }
             } else if (status === 2) {
               // 2 = 因客户不是好友导致发送失败
-              sentFail++;
-              failMap.set(item.external_userid, '客户非好友');
+              if (!failMap.has(item.external_userid)) {
+                failMap.set(item.external_userid, '客户非好友');
+                sentFail++;
+              }
             } else if (status === 3) {
               // 3 = 因客户已收到其他群发消息导致发送失败（超限）
-              sentFail++;
-              failMap.set(item.external_userid, '客户本月群发超限');
+              if (!failMap.has(item.external_userid)) {
+                failMap.set(item.external_userid, '客户本月群发超限');
+                sentFail++;
+              }
             }
             // status === 0 未发送 不计入
           }
@@ -218,8 +229,8 @@ export class WecomGroupMessageService {
     // === 3. 计算最终状态 ===
     let status: GroupMessageStatus = task.status;
     if (confirmedCount > 0) {
-      const totalTry = sentSuccess + sentFail;
-      if (sentFail === 0 && totalTry >= task.totalRecipients) {
+      // 全部成功必须企微明确回执了每一个人；仍有 status=0(未发送) 的客户时保持 EXECUTED
+      if (sentFail === 0 && sentSuccess >= task.totalRecipients) {
         status = GroupMessageStatus.ALL_SUCCESS;
       } else if (sentSuccess > 0 && sentFail > 0) {
         status = GroupMessageStatus.PARTIAL_SUCCESS;
@@ -230,8 +241,7 @@ export class WecomGroupMessageService {
       }
     }
 
-    // === 4. 更新 recipient 级状态（用 updateMany 批量，6000 人只需 2-3 次 SQL）===
-    // 按 externalUserid 分组：fail 的一组 + success 的一组 + failReason 不同的一组
+    // === 4. 更新 recipient 级状态（只按企微明确回执标记，不做反向推断）===
     const successIds: string[] = [];
     const failByReason = new Map<string, string[]>(); // reason -> [externalUserids]
     for (const rec of task.recipients) {
@@ -240,7 +250,7 @@ export class WecomGroupMessageService {
         const list = failByReason.get(reason) ?? [];
         list.push(rec.externalUserid);
         failByReason.set(reason, list);
-      } else if (sentSuccess > 0) {
+      } else if (successSet.has(rec.externalUserid)) {
         successIds.push(rec.externalUserid);
       }
     }

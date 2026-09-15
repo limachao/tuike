@@ -174,7 +174,8 @@ export class TransferService {
       // 新客户直接创建（最小化），后续由销售接管
       customer = await this.prisma.customer.create({
         data: {
-          externalUserid: `anon_${Date.now()}`,
+          // 随机后缀防同一毫秒并发创建撞 external_userid 唯一约束
+          externalUserid: `anon_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
           nickname: params.mobile.slice(-4),
           studentId: `stu_${uuidv4().replace(/-/g, '').slice(0, 16)}`,
           thirdPartyTraceId: `tpt_${uuidv4().replace(/-/g, '').slice(0, 24)}`,

@@ -456,13 +456,13 @@ export class ReminderService {
       throw new BadRequestException(`链接太长，企业微信限制最多 2048 字节`);
     }
 
-    // 防重复提交锁：同一销售 10 秒内只能提交一次
-    const dedupKey = `quick-send:${params.operatorId}:${Date.now().toString().slice(0, -1)}`; // 10 秒粒度
-    const acquired = await this.redis.safeGet(dedupKey);
-    if (acquired) {
+    // 防重复提交锁：同一销售 10 秒内只能提交一次。
+    // 必须用 SET NX 原子加锁（旧实现 GET+SET 两步之间有并发窗口，双击可能都通过）
+    const dedupKey = `quick-send:${params.operatorId}`;
+    const acquired = await this.redis.tryLock(dedupKey, 10);
+    if (!acquired) {
       throw new BadRequestException('正在提交中，请勿重复点击');
     }
-    await this.redis.safeSet(dedupKey, '1', 15); // 15 秒 TTL
 
     // 查客户（只取属于该销售名下的有效客户）
     const customers = await this.prisma.customer.findMany({
@@ -588,6 +588,20 @@ export class ReminderService {
    * 失败自动重试，最多 3 次；仍失败标记 FAILED 并记录原因。
    */
   async executeScheduledTask(taskId: number): Promise<{ ok: boolean; error?: string }> {
+    // 分布式锁：防止多实例/重启重叠时同一个定时任务被提交两次企微（客户收两条）
+    const lockKey = `scheduled-send:${taskId}`;
+    const locked = await this.redis.tryLock(lockKey, 120);
+    if (!locked) {
+      return { ok: true }; // 另一个执行器正在处理，幂等跳过
+    }
+    try {
+      return await this.doExecuteScheduledTask(taskId);
+    } finally {
+      await this.redis.delLock(lockKey);
+    }
+  }
+
+  private async doExecuteScheduledTask(taskId: number): Promise<{ ok: boolean; error?: string }> {
     const task = await this.prisma.wecomGroupMessageTask.findUnique({
       where: { id: taskId },
     });
@@ -631,18 +645,49 @@ export class ReminderService {
         extIds,
         '点击进入',
       );
-      await this.prisma.wecomGroupMessageTask.update({
-        where: { id: taskId },
-        data: {
-          status: GroupMessageStatus.PENDING_CONFIRM,
-          wecomMsgid: wecomResult.msgid,
-          wecomCreatedAt: new Date(),
-          totalRecipients: extIds.length,
-          failList: wecomResult.failList ? JSON.stringify(wecomResult.failList) : null,
-          sentFailCount: wecomResult.failList?.length ?? 0,
-          scheduleError: null,
-        },
-      });
+      // 企微任务已创建，DB 状态必须落库，否则下一分钟会重复提交（客户收两条）。
+      // 网络抖动时重试 3 次。
+      let lastDbErr: any = null;
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          await this.prisma.wecomGroupMessageTask.update({
+            where: { id: taskId },
+            data: {
+              status: GroupMessageStatus.PENDING_CONFIRM,
+              wecomMsgid: wecomResult.msgid,
+              wecomCreatedAt: new Date(),
+              totalRecipients: extIds.length,
+              failList: wecomResult.failList ? JSON.stringify(wecomResult.failList) : null,
+              sentFailCount: wecomResult.failList?.length ?? 0,
+              scheduleError: null,
+            },
+          });
+          lastDbErr = null;
+          break;
+        } catch (dbErr) {
+          lastDbErr = dbErr;
+          this.logger.error(
+            `[定时发送] 任务#${taskId} 企微已提交但状态落库失败（第${attempt}次）: ${(dbErr as Error).message}`,
+          );
+          await new Promise((r) => setTimeout(r, 1000 * attempt));
+        }
+      }
+      if (lastDbErr) {
+        // 极端情况：企微任务已建、DB 始终更新失败。标记 FAILED 阻断下分钟重复提交，
+        // 并打错误日志，需到企微后台核查该 msgid（已提交的任务仍有效，销售手机端可见）。
+        this.logger.error(
+          `[定时发送] 任务#${taskId} 状态落库连续失败！企微 msgid=${wecomResult.msgid}，已标记失败防止重发，请到企微后台核查`,
+        );
+        await this.prisma.wecomGroupMessageTask.updateMany({
+          where: { id: taskId, status: GroupMessageStatus.SCHEDULED },
+          data: {
+            status: GroupMessageStatus.FAILED,
+            wecomMsgid: wecomResult.msgid,
+            scheduleError: '系统状态更新失败，已自动阻断重发，请联系管理员核查企微任务',
+          },
+        }).catch(() => undefined);
+        return { ok: false, error: '企微已提交但系统状态更新失败，请联系管理员核查' };
+      }
       await this.audit.log({
         userId: task.createdBySalesId,
         action: 'scheduled_send_executed',
