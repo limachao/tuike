@@ -29,6 +29,8 @@ export default function QuickSendPage() {
   const [content, setContent] = useState('');
   const [url, setUrl] = useState('');
   const [customers, setCustomers] = useState<any[]>([]);
+  /** 标签首次出现时间（后端按销售记录）：标签名 → ISO 时间，用于新标签排最前 */
+  const [tagFirstSeen, setTagFirstSeen] = useState<Record<string, string>>({});
   const [keyword, setKeyword] = useState('');
   const [addFrom, setAddFrom] = useState('');
   const [addTo, setAddTo] = useState('');
@@ -67,7 +69,10 @@ export default function QuickSendPage() {
   const loadCustomers = async () => {
     try {
       const { data } = await api.get('/reminder/quick-send/customers');
-      setCustomers(Array.isArray(data) ? data : []);
+      // 兼容新旧返回格式：新格式 { customers, tagFirstSeen }，旧格式直接是数组
+      const list = Array.isArray(data) ? data : (data?.customers ?? []);
+      setCustomers(list);
+      if (!Array.isArray(data)) setTagFirstSeen(data?.tagFirstSeen ?? {});
     } catch (e) {
       console.error(e);
       setCustomers([]);
@@ -101,10 +106,24 @@ export default function QuickSendPage() {
   /** VIP 类标签：企微标签名以 VIP 开头（忽略大小写/空格），如「VIP」「VIP 学生」 */
   const isVIPTagName = (t: string) => String(t).trim().toUpperCase().startsWith('VIP');
 
-  /** 渠道来源标签：X老师视频号查岗 / X老师抖音号 等——群发选人时不展示（数据仍保留在客户资料里） */
-  const isChannelTagName = (t: string) => /视频号|抖音/.test(String(t));
+  /** 渠道来源标签：X老师视频号查岗 / X老师抖音号 / X老师快手 等——群发选人时不展示（数据仍保留在客户资料里） */
+  const isChannelTagName = (t: string) => /视频号|抖音|快手/.test(String(t));
 
-  /** 客户身上出现过的全部企微标签（按人数倒序）；VIP 类、渠道来源标签不在此显示 */
+  /**
+   * 历史标签兜底排序用的"序号"：企微不提供标签创建时间，
+   * 期数/年份类标签（911、195期、25年客户、28届）数字越大越新；
+   * 2 位数字按年份处理（25 → 2025）。非此类标签返回 null。
+   */
+  const tagSeq = (t: string): number | null => {
+    const m = t.match(/^\s*(\d{2,4})|\b(\d{2,4})\s*(?:期|届|年)/);
+    const raw = m ? (m[1] ?? m[2]) : null;
+    if (raw == null) return null;
+    const n = Number(raw);
+    return raw.length === 2 ? 2000 + n : n;
+  };
+
+  /** 客户身上出现过的全部企微标签；排序：新建标签（首次出现时间倒序）→ 期数/年份大的 → 人数多的。
+   *  VIP 类、渠道来源标签不在此显示 */
   const allTags = useMemo(() => {
     const m = new Map<string, number>();
     for (const c of customers) {
@@ -113,8 +132,21 @@ export default function QuickSendPage() {
         m.set(t, (m.get(t) ?? 0) + 1);
       }
     }
-    return [...m.entries()].sort((a, b) => b[1] - a[1]);
-  }, [customers]);
+    return [...m.entries()].sort((a, b) => {
+      // 1) 有真实首次出现时间：新的在前；只有一边有时，有时间的（本功能上线后出现的标签）在前
+      const ta = tagFirstSeen[a[0]];
+      const tb = tagFirstSeen[b[0]];
+      if (ta && tb && ta !== tb) return ta < tb ? 1 : -1;
+      // 2) 期数/年份序号兜底：数字大 = 新
+      const sa = tagSeq(a[0]);
+      const sb = tagSeq(b[0]);
+      if (sa != null && sb != null && sa !== sb) return sb - sa;
+      if (sa != null && sb == null) return -1;
+      if (sa == null && sb != null) return 1;
+      // 3) 最后按人数倒序、名称兜底
+      return b[1] - a[1] || a[0].localeCompare(b[0], 'zh');
+    });
+  }, [customers, tagFirstSeen]);
 
   /** 被隐藏的渠道来源标签种类数（用于界面提示，让销售知道这些标签只是不在此显示） */
   const hiddenChannelTagCount = useMemo(() => {
@@ -588,7 +620,7 @@ export default function QuickSendPage() {
                         <div>已手动隐藏 {hiddenTags.size} 个不常用标签，点「管理标签」可恢复</div>
                       )}
                       {hiddenChannelTagCount > 0 && (
-                        <div>已隐藏 {hiddenChannelTagCount} 个渠道来源标签（X老师视频号 / 抖音号等），仅不在此显示，客户资料中照常保留</div>
+                        <div>已隐藏 {hiddenChannelTagCount} 个渠道来源标签（X老师视频号 / 抖音号 / 快手等），仅不在此显示，客户资料中照常保留</div>
                       )}
                     </div>
                   )}

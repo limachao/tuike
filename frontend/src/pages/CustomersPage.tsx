@@ -16,7 +16,8 @@ export default function CustomersPage() {
   const load = async () => {
     try {
       const { data } = await api.get('/reminder/quick-send/customers');
-      setCustomers(Array.isArray(data) ? data : []);
+      // 兼容新旧返回格式：新格式 { customers, tagFirstSeen }，旧格式直接是数组
+      setCustomers(Array.isArray(data) ? data : (data?.customers ?? []));
     } catch (e) {
       console.error(e);
       setCustomers([]);

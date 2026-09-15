@@ -283,6 +283,9 @@ export class WecomSyncService {
       }
       // 批量落库：每 500 人一批，3 条 SQL 顶过去 ~1500 条逐条查询
       await this.bulkUpsertCustomers(rows, sales.id);
+      // 记录本销售本轮出现的全部标签：新标签首次见到即落时间（群发页按此倒序），
+      // 已存在的标签只刷新 lastSeenAt，firstSeenAt 永不改变
+      await this.recordTagMetas(sales.id, rows);
       // unionid 到手率观测：接口不返回 unionid（未绑微信开发者ID/主体不一致）时恒为 0，
       // 用于快速定位听课记录匹配不到学员的问题
       const withUnionid = rows.reduce((n, r) => n + (r.wecomUnionid ? 1 : 0), 0);
@@ -314,6 +317,41 @@ export class WecomSyncService {
       // 无论成功还是失败都释放锁（兜底：TPL 300s 超时也会自动释放）
       await this.redis.delLock(lockKey);
     }
+  }
+
+  /**
+   * 记录销售名下本轮同步出现过的标签名：
+   * - 首次出现的标签 INSERT（firstSeenAt=现在），用于群发页"新标签排最前"
+   * - 已存在的标签只更新 lastSeenAt，firstSeenAt 保持不变
+   * 企微不提供标签创建时间，这是该时间最接近真实的近似值。
+   */
+  private async recordTagMetas(salesId: number, rows: CustomerSyncRow[]) {
+    const names = new Set<string>();
+    for (const row of rows) {
+      if (!row.wecomTags) continue;
+      let arr: any;
+      try {
+        arr = JSON.parse(row.wecomTags);
+      } catch {
+        continue;
+      }
+      if (!Array.isArray(arr)) continue;
+      for (const t of arr) {
+        const n = typeof t === 'string' ? t.trim() : String(t?.name ?? '').trim();
+        if (n) names.add(n);
+      }
+    }
+    if (names.size === 0) return;
+    const now = new Date();
+    // skipDuplicates：已存在的标签不覆盖 firstSeenAt；再统一刷 lastSeenAt
+    await this.prisma.salesTagMeta.createMany({
+      data: [...names].map((name) => ({ salesUserId: salesId, name })),
+      skipDuplicates: true,
+    });
+    await this.prisma.salesTagMeta.updateMany({
+      where: { salesUserId: salesId, name: { in: [...names] } },
+      data: { lastSeenAt: now },
+    });
   }
 
   /** 同步全部销售名下客户 */

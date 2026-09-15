@@ -124,6 +124,20 @@ model CustomerSalesRelation {
   @@map("customer_sales_relations")
 }
 
+// 销售视角下标签的首次出现时间（企微接口不提供标签创建时间，同步时首次见到即记录）。
+// 快捷群发标签区按 firstSeenAt 倒序：新建的标签排最前。按销售隔离，个人标签各自计时。
+model SalesTagMeta {
+  id          Int      @id @default(autoincrement())
+  salesUserId Int      @map("sales_user_id")
+  name        String   @db.VarChar(100)
+  firstSeenAt DateTime @default(now()) @map("first_seen_at")
+  lastSeenAt  DateTime @default(now()) @map("last_seen_at")
+
+  @@unique([salesUserId, name])
+  @@index([salesUserId])
+  @@map("sales_tag_metas")
+}
+
 // 飞策侧身份（支持一个学生多个uid/thirdPartyStudentId）
 model FeiceIdentity {
   id                  Int       @id @default(autoincrement())

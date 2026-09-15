@@ -372,7 +372,7 @@ export class ReminderService {
       ORDER BY r."addTime" DESC NULLS LAST
     `;
 
-    return rows.map((r) => ({
+    const customers = rows.map((r) => ({
       id: Number(r.id),
       nickname: r.nickname,
       remarkMobiles: r.remark_mobiles,
@@ -381,6 +381,16 @@ export class ReminderService {
       // 企微客户标签名数组（同步时写入，JSON 字符串）
       wecomTags: this.parseTagArray(r.wecom_tags),
     }));
+
+    // 当前销售各标签的"首次出现时间"：群发页标签按新→旧排序
+    const metas = await this.prisma.salesTagMeta.findMany({
+      where: { salesUserId: params.operatorId },
+      select: { name: true, firstSeenAt: true },
+    });
+    const tagFirstSeen: Record<string, string> = {};
+    for (const m of metas) tagFirstSeen[m.name] = m.firstSeenAt.toISOString();
+
+    return { customers, tagFirstSeen };
   }
 
   /**
