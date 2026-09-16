@@ -47,16 +47,17 @@ interface CustomerSyncRow {
 function extractWecomTagNames(
   followInfo: any,
   tagMap: Map<string, { name: string; group: string }>,
-): Array<{ name: string; group: string }> | null {
+): Array<{ name: string; group: string; tagId?: string }> | null {
   const seen = new Set<string>();
-  const out: Array<{ name: string; group: string }> = [];
-  // 路径 1：follow_info.tags 直接带 tag_name
+  const out: Array<{ name: string; group: string; tagId?: string }> = [];
+  // 路径 1：follow_info.tags 直接带 tag_name + tag_id
   for (const t of Array.isArray(followInfo?.tags) ? followInfo.tags : []) {
     const group = String(t?.group_name ?? '').trim();
     const n = String(t?.tag_name ?? '').trim();
+    const tid = t?.tag_id != null ? String(t.tag_id) : undefined;
     if (n && !seen.has(n)) {
       seen.add(n);
-      out.push({ name: n, group });
+      out.push({ name: n, group, ...(tid ? { tagId: tid } : {}) });
     }
   }
   // 路径 2：follow_info.tag_id 需查标签库（带 group 信息）
@@ -64,7 +65,7 @@ function extractWecomTagNames(
     const info = tagMap.get(String(tid));
     if (info?.name && !seen.has(info.name)) {
       seen.add(info.name);
-      out.push({ name: info.name, group: info.group });
+      out.push({ name: info.name, group: info.group, tagId: String(tid) });
     }
   }
   return out.length ? out : null;

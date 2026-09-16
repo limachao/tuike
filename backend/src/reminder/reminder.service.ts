@@ -15,6 +15,11 @@ import { AttendanceService } from '../attendance/attendance.service';
 import { WecomGroupMessageService } from '../wecom/wecom-group-message.service';
 import { AuditLogService } from '../audit/audit-log.service';
 import { ReminderRuleService } from './reminder-rule.service';
+import {
+  NO_PUSH_TAG_ID,
+  parseTagObjects,
+  hasNoPushTag,
+} from './tag-utils';
 
 /**
  * 群发提醒任务创建：
@@ -474,22 +479,51 @@ export class ReminderService {
       throw new BadRequestException('正在提交中，请勿重复点击');
     }
 
-    // 查客户（只取属于该销售名下的有效客户）
+    // 查客户（只取属于该销售名下的有效客户，同时取该销售关系上的标签）
     const customers = await this.prisma.customer.findMany({
       where: {
         id: { in: customerIds },
         isDeleted: false,
         relations: { some: { salesUserId: params.operatorId, status: 'active' } },
       },
-      select: { id: true, externalUserid: true, nickname: true },
+      select: {
+        id: true,
+        externalUserid: true,
+        nickname: true,
+        relations: {
+          where: { salesUserId: params.operatorId, status: 'active' },
+          select: { wecomTags: true },
+        },
+      },
     });
     if (customers.length === 0) throw new BadRequestException('选中的客户均不在你名下');
 
+    // 后端硬排除「不需要推」标签客户：防止前端绕过
+    let noPushExcluded = 0;
+    let foundNoPushTag = false;
+    const afterNoPush = customers.filter((c) => {
+      const tags = parseTagObjects(c.relations[0]?.wecomTags);
+      if (hasNoPushTag(tags)) {
+        foundNoPushTag = true;
+        noPushExcluded++;
+        return false;
+      }
+      return true;
+    });
+    if (!foundNoPushTag && NO_PUSH_TAG_ID) {
+      this.logger.warn(`「不需要推」tagId=${NO_PUSH_TAG_ID} 未在选中客户标签中命中`);
+    }
+    if (noPushExcluded > 0) {
+      this.logger.warn(
+        `快捷群发后端排除 ${noPushExcluded} 位「不需要推」客户（销售#${params.operatorId}）`,
+      );
+    }
+
     // 过滤掉没有企微 externalUserid 的客户（企微 API 不认，会整体报错）
-    const validCustomers = customers.filter(
+    const validCustomers = afterNoPush.filter(
       (c) => c.externalUserid && c.externalUserid.trim().length > 0,
     );
-    const skipped = customers.length - validCustomers.length;
+    const skipped = afterNoPush.length - validCustomers.length;
     if (validCustomers.length === 0) {
       throw new BadRequestException(
         `选中的 ${customers.length} 位客户都还未绑定企业微信，无法发送。请先同步客户信息。`,

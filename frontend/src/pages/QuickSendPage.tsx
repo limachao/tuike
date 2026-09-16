@@ -40,6 +40,7 @@ export default function QuickSendPage() {
   /** 第二排「过滤标签」：点亮后命中的客户强制不推送（自动取消勾选且不可选） */
   const [excludeVIP, setExcludeVIP] = useState(false);
   const [excludeListened, setExcludeListened] = useState(false);
+  const [excludeNoPush, setExcludeNoPush] = useState(false);
   /** 发送方式：now=立即提交企微 / scheduled=定时到点自动提交 */
   const [sendMode, setSendMode] = useState<'now' | 'scheduled'>('now');
   const [scheduleTime, setScheduleTime] = useState(''); // datetime-local 格式
@@ -109,6 +110,9 @@ export default function QuickSendPage() {
   /** 渠道来源标签：X老师视频号查岗 / X老师抖音号 / X老师快手 等——群发选人时不展示（数据仍保留在客户资料里） */
   const isChannelTagName = (t: string) => /视频号|抖音|快手/.test(String(t));
 
+  /** 「不需要推」标签：群发选人时自动排除，归入过滤区 */
+  const isNoPushTag = (t: string) => String(t).trim() === '不需要推';
+
   /**
    * 历史标签兜底排序用的"序号"：企微不提供标签创建时间，
    * 期数/年份类标签（911、195期、25年客户、28届）数字越大越新；
@@ -128,7 +132,7 @@ export default function QuickSendPage() {
     const m = new Map<string, number>();
     for (const c of customers) {
       for (const t of (c.wecomTags ?? []) as string[]) {
-        if (isVIPTagName(t) || isChannelTagName(t)) continue;
+        if (isVIPTagName(t) || isChannelTagName(t) || isNoPushTag(t)) continue;
         m.set(t, (m.get(t) ?? 0) + 1);
       }
     }
@@ -223,7 +227,7 @@ export default function QuickSendPage() {
   // 清空筛选的瞬间一次性渲染上万行导致页面卡顿
   useEffect(() => {
     setVisibleCount(200);
-  }, [keyword, addFrom, addTo, listenFilter, activeTags, excludeVIP, excludeListened]);
+  }, [keyword, addFrom, addTo, listenFilter, activeTags, excludeVIP, excludeListened, excludeNoPush]);
 
   const customerById = useMemo(
     () => new Map<number, any>(customers.map((c) => [c.id, c])),
@@ -234,9 +238,15 @@ export default function QuickSendPage() {
   const isVIP = (c: any) =>
     ((c?.wecomTags ?? []) as string[]).some((t) => isVIPTagName(t));
 
+  /** 「不需要推」：客户身上带「不需要推」标签 */
+  const isNoPush = (c: any) =>
+    ((c?.wecomTags ?? []) as string[]).some((t) => isNoPushTag(t));
+
   /** 命中「过滤标签」任一规则的客户：不推送（勾选被拦截、全选跳过、行置灰） */
   const isExcluded = (c: any) =>
-    (excludeVIP && isVIP(c)) || (excludeListened && (c?.listenSec ?? 0) > 0);
+    (excludeVIP && isVIP(c)) ||
+    (excludeListened && (c?.listenSec ?? 0) > 0) ||
+    (excludeNoPush && isNoPush(c));
 
   /** 第二排过滤标签上的人数统计（全部客户口径） */
   const vipCount = useMemo(() => customers.filter(isVIP).length, [customers]);
@@ -244,6 +254,7 @@ export default function QuickSendPage() {
     () => customers.filter((c) => (c.listenSec ?? 0) > 0).length,
     [customers],
   );
+  const noPushCount = useMemo(() => customers.filter(isNoPush).length, [customers]);
 
   /** 选中直播课程 → 填入追踪链接 + 默认文案 */
   const fillLive = (id: number) => {
@@ -325,6 +336,17 @@ export default function QuickSendPage() {
       setSelected((prev) => new Set([...prev].filter((id) => {
         const c = customerById.get(id);
         return c ? (c.listenSec ?? 0) <= 0 : true;
+      })));
+    }
+  };
+
+  const toggleExcludeNoPush = () => {
+    const next = !excludeNoPush;
+    setExcludeNoPush(next);
+    if (next) {
+      setSelected((prev) => new Set([...prev].filter((id) => {
+        const c = customerById.get(id);
+        return c ? !isNoPush(c) : true;
       })));
     }
   };
@@ -667,6 +689,23 @@ export default function QuickSendPage() {
                         excludeListened ? 'bg-white/20 text-white' : 'bg-black/25 text-text-tertiary'
                       }`}>{listenedCount}人</span>
                     </button>
+                    {noPushCount > 0 && (
+                      <button
+                        onClick={toggleExcludeNoPush}
+                        className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-full border text-sm font-medium whitespace-nowrap transition-all duration-150 active:scale-95 ${
+                          excludeNoPush
+                            ? 'border-red-300/60 bg-gradient-to-b from-red-400 to-red-600 text-white shadow-lg shadow-red-500/30'
+                            : 'border-white/[0.12] bg-white/[0.07] text-text-secondary hover:bg-white/[0.12] hover:border-white/25'
+                        }`}
+                        title="带「不需要推」标签的客户不推送"
+                      >
+                        🚫 不需要推
+                        {excludeNoPush && <span className="text-[11px] font-normal text-white/85">·已排除</span>}
+                        <span className={`px-1.5 rounded-full text-[11px] leading-4 ${
+                          excludeNoPush ? 'bg-white/20 text-white' : 'bg-black/25 text-text-tertiary'
+                        }`}>{noPushCount}人</span>
+                      </button>
+                    )}
                   </div>
                 </div>
               </div>
