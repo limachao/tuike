@@ -40,7 +40,8 @@ export default function QuickSendPage() {
   /** 第二排「过滤标签」：点亮后命中的客户强制不推送（自动取消勾选且不可选） */
   const [excludeVIP, setExcludeVIP] = useState(false);
   const [excludeListened, setExcludeListened] = useState(false);
-  const [excludeNoPush, setExcludeNoPush] = useState(false);
+  /** 「不需要推」永远排除：后端硬拦截 + 前端默认点亮不可关闭，保证前后端名单一致 */
+  const [excludeNoPush] = useState(true);
   /** 发送方式：now=立即提交企微 / scheduled=定时到点自动提交 */
   const [sendMode, setSendMode] = useState<'now' | 'scheduled'>('now');
   const [scheduleTime, setScheduleTime] = useState(''); // datetime-local 格式
@@ -340,16 +341,7 @@ export default function QuickSendPage() {
     }
   };
 
-  const toggleExcludeNoPush = () => {
-    const next = !excludeNoPush;
-    setExcludeNoPush(next);
-    if (next) {
-      setSelected((prev) => new Set([...prev].filter((id) => {
-        const c = customerById.get(id);
-        return c ? !isNoPush(c) : true;
-      })));
-    }
-  };
+  // 「不需要推」永远排除，不需要 toggle 函数（后端硬拦截，前端不可关闭）
 
   const clearDateFilter = () => { setAddFrom(''); setAddTo(''); };
 
@@ -689,23 +681,16 @@ export default function QuickSendPage() {
                         excludeListened ? 'bg-white/20 text-white' : 'bg-black/25 text-text-tertiary'
                       }`}>{listenedCount}人</span>
                     </button>
-                    {noPushCount > 0 && (
-                      <button
-                        onClick={toggleExcludeNoPush}
-                        className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-full border text-sm font-medium whitespace-nowrap transition-all duration-150 active:scale-95 ${
-                          excludeNoPush
-                            ? 'border-red-300/60 bg-gradient-to-b from-red-400 to-red-600 text-white shadow-lg shadow-red-500/30'
-                            : 'border-white/[0.12] bg-white/[0.07] text-text-secondary hover:bg-white/[0.12] hover:border-white/25'
-                        }`}
-                        title="带「不需要推」标签的客户不推送"
-                      >
-                        🚫 不需要推
-                        {excludeNoPush && <span className="text-[11px] font-normal text-white/85">·已排除</span>}
-                        <span className={`px-1.5 rounded-full text-[11px] leading-4 ${
-                          excludeNoPush ? 'bg-white/20 text-white' : 'bg-black/25 text-text-tertiary'
-                        }`}>{noPushCount}人</span>
-                      </button>
-                    )}
+                    {/* 「不需要推」永远排除（后端硬拦截 + 前端不可关闭） */}
+                    <button
+                      disabled
+                      className="inline-flex items-center gap-1.5 px-4 py-2 rounded-full border text-sm font-medium whitespace-nowrap border-red-300/60 bg-gradient-to-b from-red-400 to-red-600 text-white shadow-lg shadow-red-500/30 cursor-not-allowed opacity-90"
+                      title="自动排除：后端硬拦截，前后端名单一致"
+                    >
+                      🚫 不需要推
+                      <span className="text-[11px] font-normal text-white/85">·永远排除</span>
+                      <span className="px-1.5 rounded-full text-[11px] leading-4 bg-white/20 text-white">{noPushCount}人</span>
+                    </button>
                   </div>
                 </div>
               </div>
